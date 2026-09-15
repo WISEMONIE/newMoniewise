@@ -49,6 +49,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
 //     ✅ FIXED: Native Query (Bypasses Hibernate HQL parser errors)
 //     Uses Postgres JSON operator (->>) to extract text directly.
 //     Note: We provide a countQuery to ensure pagination works efficiently.
+// Privacy: name-based search removed — only email, phone, and userTag are
+// searchable via the API.  Name search is handled client-side against the
+// user's own beneficiary list.
 @Query(value = "SELECT " +
         "u.id AS id, " +
         "u.profile_data ->> 'firstName' AS firstName, " +
@@ -66,15 +69,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
         "WHERE (" +
         "   lower(coalesce(u.email, '')) LIKE lower(concat('%', :query, '%')) " +
         "   OR coalesce(u.phone, '') LIKE concat('%', :query, '%') " +
-        "   OR lower(coalesce(u.profile_data ->> 'firstName', '')) LIKE lower(concat('%', :query, '%')) " +
-        "   OR lower(coalesce(u.profile_data ->> 'lastName', '')) LIKE lower(concat('%', :query, '%')) " +
         "   OR lower(coalesce(u.profile_data ->> 'userTag', '')) LIKE lower(concat('%', :query, '%'))" +
         ") AND coalesce(u.is_deleted, false) = false",
         countQuery = "SELECT count(*) FROM users u WHERE (" +
                 "   lower(coalesce(u.email, '')) LIKE lower(concat('%', :query, '%')) " +
                 "   OR coalesce(u.phone, '') LIKE concat('%', :query, '%') " +
-                "   OR lower(coalesce(u.profile_data ->> 'firstName', '')) LIKE lower(concat('%', :query, '%')) " +
-                "   OR lower(coalesce(u.profile_data ->> 'lastName', '')) LIKE lower(concat('%', :query, '%')) " +
                 "   OR lower(coalesce(u.profile_data ->> 'userTag', '')) LIKE lower(concat('%', :query, '%'))" +
                 ") AND coalesce(u.is_deleted, false) = false",
         nativeQuery = true)

@@ -78,7 +78,7 @@ public class SecurityConfig {
                 .exceptionHandling().authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                 .and()
                 .authorizeRequests()
-                .antMatchers("/auth/signup", "/auth/verify-signup-otp", "/auth/resend-signup-otp", "/auth/bvn/pre-verify", "/auth/login", "/auth/oauth2/**", "/tnc/**", "/users/otp/generate", "/users/otp/verify", "/auth/forgot-password", "/auth/verify-reset-otp", "/auth/reset-password", "/auth/google").permitAll()
+                .antMatchers("/auth/signup", "/auth/verify-signup-otp", "/auth/resend-signup-otp", "/auth/bvn/pre-verify", "/auth/login", "/tnc/**", "/users/otp/generate", "/users/otp/verify", "/auth/forgot-password", "/auth/verify-reset-otp", "/auth/reset-password").permitAll()
                 .antMatchers("/api/webhooks/monnify", "/api/webhooks/securewave",
                              "/api/webhooks/providus", "/api/webhooks/rubies").permitAll()   // Rubies webhook must be open — no JWT
                 // Public brand assets (email logo etc.). Email clients fetch the logo

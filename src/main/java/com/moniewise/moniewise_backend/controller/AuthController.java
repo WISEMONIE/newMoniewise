@@ -1,9 +1,5 @@
 package com.moniewise.moniewise_backend.controller;
 
-import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
-import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
-import com.google.api.client.http.javanet.NetHttpTransport;
-import com.google.api.client.json.gson.GsonFactory;
 import com.moniewise.moniewise_backend.dto.request.AuthRequest;
 import com.moniewise.moniewise_backend.dto.request.BvnPreVerifyRequest;
 import com.moniewise.moniewise_backend.dto.request.ChangePasswordRequest;
@@ -36,9 +32,6 @@ import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
-import java.io.IOException;
-import java.security.GeneralSecurityException;
-import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -63,8 +56,6 @@ public class AuthController {
     @Autowired private AccountDeletionService accountDeletionService;
     @Autowired private HowToUseWisemonieNudgeService howToUseWisemonieNudgeService;
 
-    @Value("${spring.security.oauth2.client.registration.google.client-id:}")
-    private String googleClientId;
 
     @Value("${SESSION_IDLE_TIMEOUT_SECONDS:${session.idle-timeout-seconds:240}}")
     private String idleTimeoutSecondsRaw;
@@ -402,36 +393,6 @@ public class AuthController {
         }
     }
 
-    @PostMapping("/google")
-    public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> payload, HttpServletRequest httpRequest) {
-        String idTokenString = payload.get("token");
-        String throttleKey = abuseProtectionService.buildKey("google", httpRequest.getRemoteAddr());
-        abuseProtectionService.checkAllowed(AbuseProtectionService.GOOGLE_LOGIN, throttleKey);
-        if (idTokenString == null || idTokenString.isBlank()) {
-            abuseProtectionService.recordFailure(AbuseProtectionService.GOOGLE_LOGIN, throttleKey);
-            return ResponseEntity.badRequest().body(Map.of("error", "Token is required"));
-        }
-        try {
-            GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(new NetHttpTransport(), new GsonFactory())
-                    .setAudience(Collections.singletonList(googleClientId))
-                    .build();
-            GoogleIdToken idToken = verifier.verify(idTokenString);
-            if (idToken == null) {
-                abuseProtectionService.recordFailure(AbuseProtectionService.GOOGLE_LOGIN, throttleKey);
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Invalid Google token"));
-            }
-            GoogleIdToken.Payload googlePayload = idToken.getPayload();
-            String email = googlePayload.getEmail();
-            String name = (String) googlePayload.get("name");
-            User user = userService.findOrCreateOAuthUser(email, name);
-            abuseProtectionService.recordSuccess(AbuseProtectionService.GOOGLE_LOGIN, throttleKey);
-            return generateAuthResponse(user);
-        } catch (GeneralSecurityException | IOException e) {
-            abuseProtectionService.recordFailure(AbuseProtectionService.GOOGLE_LOGIN, throttleKey);
-            logger.error("Google authentication failed", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "Google authentication failed"));
-        }
-    }
 
     private ResponseEntity<?> generateAuthResponse(User user) {
         try {
