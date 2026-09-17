@@ -91,7 +91,7 @@ public class SecurityConfig {
                 // authenticated below.
                 .antMatchers("/privacy-policy", "/terms-of-use", "/delete-account").permitAll()
                 .antMatchers("/blog", "/blog/**", "/blog/api/**").permitAll()
-                .antMatchers("/app/version-check", "/app/update-status", "/app/config").permitAll()
+                .antMatchers("/app/version-check", "/app/update-status", "/app/config", "/app/whats-new").permitAll()
                 .antMatchers("/ws", "/ws/**", "/ws-sockjs", "/ws-sockjs/**").permitAll()
                 .antMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .antMatchers("/actuator/metrics/**", "/actuator/prometheus").hasRole("ADMIN")

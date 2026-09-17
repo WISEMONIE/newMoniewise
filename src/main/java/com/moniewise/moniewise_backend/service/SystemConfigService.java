@@ -192,6 +192,12 @@ public class SystemConfigService {
     public static final String APP_UPDATE_IOS_LATEST_BUILD = "app.update.ios.latest_build";
     public static final String APP_UPDATE_IOS_STORE_URL = "app.update.ios.store_url";
 
+    // ── "What's New" modal (shown to users after app update) ─────────────────
+    /** Headline text for the What's New modal. */
+    public static final String WHATS_NEW_TITLE = "app.whats_new.title";
+    /** JSON array of {@code {"title":"…","body":"…"}} items displayed in the modal. */
+    public static final String WHATS_NEW_ITEMS = "app.whats_new.items";
+
     // ──────────────────────────────────────────────────────────────────────────
 
     private final SystemConfigRepository repository;
