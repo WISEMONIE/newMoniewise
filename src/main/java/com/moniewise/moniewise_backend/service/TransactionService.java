@@ -512,10 +512,12 @@ public class TransactionService {
                 && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(resolveProviderName(transaction))) {
             fee = fee.add(markupCalculatorService.calculateNipFee(absoluteAmount));
         }
+        BigDecimal stampDuty = transaction.getStampDuty() != null ? transaction.getStampDuty() : BigDecimal.ZERO;
         if (reversed) {
             fee = BigDecimal.ZERO;
+            stampDuty = BigDecimal.ZERO;
         }
-        BigDecimal netAmount = reversed ? absoluteAmount : (debit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee));
+        BigDecimal netAmount = reversed ? absoluteAmount : (debit ? absoluteAmount.add(fee).add(stampDuty) : absoluteAmount.subtract(fee));
 
         String sender;
         String recipient;
@@ -641,6 +643,7 @@ public class TransactionService {
                 transaction.getDescription(),
                 absoluteAmount,
                 fee,
+                stampDuty,
                 netAmount,
                 sender,
                 recipient,

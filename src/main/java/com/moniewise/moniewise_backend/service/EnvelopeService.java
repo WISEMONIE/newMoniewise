@@ -1148,6 +1148,7 @@ public class EnvelopeService {
                 .externalAccountName(resolvedName)
                 .amount(amount.negate())
                 .fee(fee)
+                .stampDuty(stampDuty)
                 .transactionType(TransactionType.ENVELOPE_TO_EXTERNAL)
                 .status(TransactionStatus.PENDING)
                 .reference(myReference)

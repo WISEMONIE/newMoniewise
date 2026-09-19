@@ -180,7 +180,7 @@ public class BudgetService {
         validateEnvelopeCount(request);
 
         BigDecimal originalAmount = request.getTotalAmount();
-        BigDecimal creationFee = calculateBudgetCreationFee(durationDays).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal creationFee = calculateBudgetCreationFee(durationDays, user.getId()).setScale(2, RoundingMode.HALF_UP);
         Map<EnvelopeRequest, BigDecimal> finalAmounts = calculateFinalEnvelopeAmounts(request, originalAmount);
         validateEnvelopePercentages(request);
 
@@ -249,7 +249,10 @@ public class BudgetService {
         }
     }
 
-    private BigDecimal calculateBudgetCreationFee(long durationDays) {
+    private BigDecimal calculateBudgetCreationFee(long durationDays, Long userId) {
+        if (budgetRepository.countByUserId(userId) == 0) {
+            return BigDecimal.ZERO;
+        }
         BigDecimal baseFee = systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO);
         if (baseFee.compareTo(BigDecimal.ZERO) <= 0) {
             return BigDecimal.ZERO;
@@ -831,7 +834,7 @@ public class BudgetService {
 
         // === CALCULATE FEE (read from system_config — never hardcoded) ===
         // budget.creation.fee = 0 means no fee charged. Positive value = fee per 30-day interval.
-        BigDecimal fee = calculateBudgetCreationFee(durationDays);
+        BigDecimal fee = calculateBudgetCreationFee(durationDays, user.getId());
         BigDecimal originalAmount = request.getTotalAmount();   // This is what goes to envelopes
 
         // === ENVELOPE PROCESSING & ROUNDING (unchanged logic) ===

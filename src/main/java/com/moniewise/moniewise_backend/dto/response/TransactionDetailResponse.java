@@ -15,6 +15,7 @@ public record TransactionDetailResponse(
         String fullDescription,
         BigDecimal amount,
         BigDecimal fee,
+        BigDecimal stampDuty,
         BigDecimal netAmount,
         String sender,
         String recipient,

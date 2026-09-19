@@ -247,6 +247,7 @@ public class EnvelopeAutoTransferService {
                 .externalAccountName(config.getAccountName())
                 .amount(amount.negate())
                 .fee(markupFee)
+                .stampDuty(stampDuty)
                 .transactionType(TransactionType.ENVELOPE_TO_EXTERNAL)
                 .status(TransactionStatus.PENDING)
                 .reference(reference)

@@ -1263,8 +1263,10 @@ public class WalletService {
             logger.info("[Closure] Flat closure fee for user={} amount=₦{}: markup=₦{} NIP=₦{}",
                     userId, request.getAmount(), transferFee, nipFee);
         } else if (RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
-            transferFee = markupCalculatorService.calculateMarkup(request.getAmount(), userId);
-            nipFee      = markupCalculatorService.calculateNipFee(request.getAmount());
+            MarkupCalculatorService.FeeBreakdown breakdown =
+                    markupCalculatorService.buildBreakdown(request.getAmount(), userId);
+            transferFee = breakdown.markupFee();
+            nipFee      = breakdown.bankCharge();
             logger.info("[Transfer] Rubies fees for user={} amount={}: markup=₦{} NIP=₦{}",
                     userId, request.getAmount(), transferFee, nipFee);
         } else {
@@ -1718,6 +1720,9 @@ public class WalletService {
         evictWalletCache(withdrawal.getUserId());
 
         if (transactionLogRepository.findByReference(withdrawal.getClientReference()).isEmpty()) {
+            BigDecimal stampDuty = RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())
+                    ? markupCalculatorService.calculateStampDuty(withdrawal.getAmount())
+                    : BigDecimal.ZERO;
             TransactionLog logEntry = TransactionLog.builder()
                     .userId(withdrawal.getUserId())
                     .externalAccountId(null)
@@ -1726,6 +1731,7 @@ public class WalletService {
                     .externalAccountName(withdrawal.getAccountName())
                     .amount(withdrawal.getAmount())
                     .fee(fee)
+                    .stampDuty(stampDuty)
                     .reference(withdrawal.getClientReference())
                     .status(TransactionStatus.PROCESSING)
                     .transactionType(TransactionType.WALLET_WITHDRAWAL)

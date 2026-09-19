@@ -77,6 +77,15 @@ public class MarkupCalculatorService {
         BigDecimal markup    = calculateMarkup(transferAmount, userId);
         BigDecimal nipFee    = calculateNipFee(transferAmount);
         BigDecimal stampDuty = calculateStampDuty(transferAmount);
+
+        if (stampDuty.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal minCombined = stampDuty;
+            BigDecimal combined = nipFee.add(markup);
+            if (combined.compareTo(minCombined) < 0) {
+                markup = minCombined.subtract(nipFee);
+            }
+        }
+
         BigDecimal total     = transferAmount.add(nipFee).add(markup).add(stampDuty);
         return new FeeBreakdown(transferAmount, nipFee, markup, stampDuty, total);
     }

@@ -382,6 +382,9 @@ public class TransactionLog {
     @Column(name = "counterparty_user_id")
     private Long counterpartyUserId;
 
+    @Column(name = "stamp_duty")
+    private BigDecimal stampDuty;
+
     public TransactionLog() {
     }
 
@@ -589,6 +592,14 @@ public class TransactionLog {
         this.counterpartyUserId = counterpartyUserId;
     }
 
+    public BigDecimal getStampDuty() {
+        return stampDuty;
+    }
+
+    public void setStampDuty(BigDecimal stampDuty) {
+        this.stampDuty = stampDuty;
+    }
+
     public static class TransactionLogBuilder {
 
         private Long userId;
@@ -610,6 +621,7 @@ public class TransactionLog {
         private TransactionType transactionType;
         private String description;
         private LocalDateTime createdAt;
+        private BigDecimal stampDuty;
 
         TransactionLogBuilder() {
         }
@@ -709,6 +721,11 @@ public class TransactionLog {
             return this;
         }
 
+        public TransactionLogBuilder stampDuty(BigDecimal stampDuty) {
+            this.stampDuty = stampDuty;
+            return this;
+        }
+
         public TransactionLog build() {
             TransactionLog log = new TransactionLog();
 
@@ -731,6 +748,7 @@ public class TransactionLog {
             log.setTransactionType(this.transactionType);
             log.setDescription(this.description);
             log.setCreatedAt(this.createdAt);
+            log.setStampDuty(this.stampDuty);
 
             return log;
         }
