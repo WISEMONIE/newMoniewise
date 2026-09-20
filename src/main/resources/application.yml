@@ -36,7 +36,6 @@ spring:
       max-lifetime: ${HIKARI_MAX_LIFETIME:900000}
       leak-detection-threshold: ${HIKARI_LEAK_DETECTION:30000}
       keepalive-time: ${HIKARI_KEEPALIVE:60000}
-      pool-name: MoniWisePool
 
 management:
   endpoints:
