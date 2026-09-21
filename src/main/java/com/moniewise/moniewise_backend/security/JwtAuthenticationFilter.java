@@ -79,6 +79,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     authSessionService.isSessionActive(email, tokenSessionId);
 
             if (jwtUtil.validateToken(token, userDetails) && isSessionValid) {
+                String scope = jwtUtil.extractScope(token);
+                if (scope != null) {
+                    request.setAttribute("jwt.scope", scope);
+                }
                 UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                         userDetails, null, userDetails.getAuthorities());
                 auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));

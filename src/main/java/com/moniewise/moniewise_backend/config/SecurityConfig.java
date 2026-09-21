@@ -40,6 +40,7 @@ import java.util.stream.Collectors;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final com.moniewise.moniewise_backend.security.BlogScopeFilter blogScopeFilter;
     private final JwtUtil jwtUtil;
     private final UserDetailsService userDetailsService;
     private final UserService userService;
@@ -54,6 +55,7 @@ public class SecurityConfig {
 
     public SecurityConfig(
             @Lazy JwtAuthenticationFilter jwtAuthenticationFilter,
+            com.moniewise.moniewise_backend.security.BlogScopeFilter blogScopeFilter,
             JwtUtil jwtUtil,
             UserDetailsService userDetailsService,
             UserService userService,
@@ -61,6 +63,7 @@ public class SecurityConfig {
             HowToUseWisemonieNudgeService howToUseWisemonieNudgeService
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.blogScopeFilter = blogScopeFilter;
         this.jwtUtil = jwtUtil;
         this.userDetailsService = userDetailsService;
         this.userService = userService;
@@ -90,7 +93,7 @@ public class SecurityConfig {
                 // with no login. The JSON /legal/** API for the in-app viewer stays
                 // authenticated below.
                 .antMatchers("/privacy-policy", "/terms-of-use", "/delete-account").permitAll()
-                .antMatchers("/blog", "/blog/**", "/blog/api/**").permitAll()
+                .antMatchers("/blog", "/blog/**", "/blog/api/**", "/blog/admin/login").permitAll()
                 .antMatchers("/app/version-check", "/app/update-status", "/app/config", "/app/whats-new").permitAll()
                 .antMatchers("/ws", "/ws/**", "/ws-sockjs", "/ws-sockjs/**").permitAll()
                 .antMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
@@ -117,7 +120,8 @@ public class SecurityConfig {
                     response.getWriter().write("{\"token\":\"" + token + "\"}");
                 })
                 .and()
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(blogScopeFilter, JwtAuthenticationFilter.class);
         return http.build();
     }
 

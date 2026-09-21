@@ -83,6 +83,22 @@ public class JwtUtil {
         return createToken(claims, userDetails.getUsername());
     }
 
+    public String generateBlogAdminToken(UserDetails userDetails, String sessionId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "ROLE_ADMIN");
+        claims.put("sessionId", sessionId);
+        claims.put("scope", "blog");
+        return createToken(claims, userDetails.getUsername());
+    }
+
+    public String extractScope(String token) {
+        try {
+            return extractClaim(token, claims -> claims.get("scope", String.class));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // 👇 ADD THIS METHOD TO JwtUtil.java
     public String extractSessionId(String token) {
         return extractClaim(token, claims -> claims.get("sessionId", String.class));
