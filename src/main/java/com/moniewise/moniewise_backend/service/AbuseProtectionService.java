@@ -82,6 +82,9 @@ public class AbuseProtectionService {
     // ── Beneficiaries ─────────────────────────────────────────────────────────
     public static final String BENEFICIARY_ADD = "beneficiary.add";
 
+    // ── Blog admin ─────────────────────────────────────────────────────────────
+    public static final String BLOG_LOGIN = "auth.blog_login";
+
     // ── KYC / BVN ─────────────────────────────────────────────────────────────
     /** Public pre-verify step during signup — 3 attempts per 10 min before lockout. */
     public static final String BVN_PRE_VERIFY = "kyc.bvn_pre_verify";
@@ -230,6 +233,9 @@ public class AbuseProtectionService {
 
             // Beneficiaries
             case BENEFICIARY_ADD -> new AttemptPolicy(10, Duration.ofHours(1), Duration.ofMinutes(30));
+
+            // Blog admin login — tighter than normal login: only admins should ever call this
+            case BLOG_LOGIN -> new AttemptPolicy(3, Duration.ofMinutes(15), Duration.ofMinutes(30));
 
             // KYC / BVN — tight: 3 attempts per window, 10-minute lockout
             // Each call hits SecureWave; abuse wastes real money and is an enumeration risk

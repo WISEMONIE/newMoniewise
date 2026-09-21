@@ -118,7 +118,7 @@ public class SecurityConfig {
                 })
                 .and()
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(new com.moniewise.moniewise_backend.security.BlogScopeFilter(), JwtAuthenticationFilter.class);
+                .addFilterAfter(new com.moniewise.moniewise_backend.security.BlogScopeFilter(), UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 
