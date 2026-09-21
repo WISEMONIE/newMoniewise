@@ -16,6 +16,7 @@ public enum TransactionType {
     FAILED,
     USER_TO_USER,
     WALLET_TO_BUDGET,
+    BUDGET_TOP_UP,
     WALLET_TO_EXTERNAL,
     WALLET_TO_USER,
     WALLET_DEPOSIT_FEE,

@@ -1289,16 +1289,18 @@ public class BudgetService {
         }
     }
 
-    // 12/04/2025 -----> New: Top-up Budget
     @Transactional
     public void topUpBudget(Long budgetId, Double amount, String email) {
-        // Step 1: Validate inputs and ownership
-        if (amount <= 0) {
-            throw new IllegalArgumentException("Top-up amount must be positive");
+        BigDecimal topupAmount = BigDecimal.valueOf(amount);
+        BigDecimal minimumTopUp = new BigDecimal("100");
+
+        if (topupAmount.compareTo(minimumTopUp) < 0) {
+            throw new IllegalArgumentException("Minimum top-up amount is ₦100");
         }
+
         User user = userService.findByEmail(email);
         Budget budget = budgetRepository.findById(budgetId)
-                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
+                .orElseThrow(() -> new IllegalArgumentException("Budget not found"));
         if (!budget.getUser().getId().equals(user.getId())) {
             throw new SecurityException("You do not have permission to top up this budget");
         }
@@ -1306,74 +1308,74 @@ public class BudgetService {
             throw new IllegalArgumentException("Budget must be active to top up");
         }
 
-        // Step 2: Check last top-up time (once per day)
-//        LocalDateTime now = LocalDateTime.now();
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        LocalDateTime lastTopup = budget.getLastTopupTime();
-        if (lastTopup != null) {
-            LocalDateTime nextAllowedTopup = lastTopup.plusDays(1);
-            if (now.isBefore(nextAllowedTopup)) {
-                throw new IllegalArgumentException("Top-up allowed only once per day. Next top-up available after " + nextAllowedTopup);
-            }
+        LocalDate today = now.toLocalDate();
+        long remainingDays = java.time.temporal.ChronoUnit.DAYS.between(today, budget.getEndDate());
+        if (remainingDays < 2) {
+            throw new IllegalArgumentException("Budget must have at least 2 days remaining to top up");
         }
 
-        // Step 3: Deduct from Wallet (simulated for now)
-        BigDecimal topupAmount = BigDecimal.valueOf(amount);
-        // TODO: Integrate with Paystack/Flutterwave to deduct 'topupAmount' from user's Wallet
-        // - Verify wallet balance: gateway.checkBalance(user.getWalletId())
-        // - Deduct amount: gateway.deductFromWallet(user.getWalletId(), topupAmount)
-        System.out.println("Simulating deduction of ₦" + topupAmount + " from user's Wallet for Budget ID: " + budgetId);
+        LocalDateTime lastTopup = budget.getLastTopupTime();
+        if (lastTopup != null && now.isBefore(lastTopup.plusDays(1))) {
+            throw new IllegalArgumentException(
+                    "Top-up allowed once per day. Try again after " + lastTopup.plusDays(1).toLocalDate());
+        }
 
-        // Step 4: Increase total_amount
-        BigDecimal newTotalAmount = budget.getTotalAmount().add(topupAmount);
-        budget.setTotalAmount(newTotalAmount);
+        walletService.deductBalance(user.getId(), topupAmount);
 
-        // Step 5: Reallocate to Envelopes (static: same percentage as initial allocation)
         List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
         if (envelopes.isEmpty()) {
-            throw new IllegalArgumentException("No envelopes found in Budget to reallocate top-up amount");
+            throw new IllegalArgumentException("No envelopes found in this budget");
         }
 
-        BigDecimal originalAllocated = budget.getAllocatedAmount();
-        if (originalAllocated.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Original allocated amount is zero, cannot determine allocation percentages");
+        BigDecimal totalInitial = envelopes.stream()
+                .map(Envelope::getInitialAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (totalInitial.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Cannot determine envelope allocation ratios");
         }
 
-        for (Envelope envelope : envelopes) {
-            // Calculate percentage of original allocation for this envelope
-            BigDecimal envelopePercentage = envelope.getAmount().divide(originalAllocated, 4, BigDecimal.ROUND_HALF_UP);
-            // Calculate additional amount for this envelope
-            BigDecimal additionalAmount = topupAmount.multiply(envelopePercentage);
-            // Update envelope amounts
-            envelope.setAmount(envelope.getAmount().add(additionalAmount));
-            envelope.setRemainingAmount(envelope.getRemainingAmount().add(additionalAmount));
+        BigDecimal distributed = BigDecimal.ZERO;
+        for (int i = 0; i < envelopes.size(); i++) {
+            Envelope envelope = envelopes.get(i);
+            BigDecimal share;
+            if (i == envelopes.size() - 1) {
+                share = topupAmount.subtract(distributed);
+            } else {
+                BigDecimal ratio = envelope.getInitialAmount()
+                        .divide(totalInitial, 6, RoundingMode.HALF_UP);
+                share = topupAmount.multiply(ratio)
+                        .setScale(2, RoundingMode.HALF_UP);
+                distributed = distributed.add(share);
+            }
+            envelope.setAmount(envelope.getAmount().add(share));
+            envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().add(share));
+            envelope.setInitialAmount(envelope.getInitialAmount().add(share));
             envelopeRepository.save(envelope);
         }
 
         evictEnvelopeCache(budgetId);
 
-        // Update allocated amount
-        BigDecimal newAllocatedAmount = budget.getAllocatedAmount().add(topupAmount);
-        budget.setAllocatedAmount(newAllocatedAmount);
-
-        // Step 6: Update last_topup_time
+        budget.setTotalAmount(budget.getTotalAmount().add(topupAmount));
+        budget.setAllocatedAmount(budget.getAllocatedAmount().add(topupAmount));
+        budget.setRemainingAmount(budget.getRemainingAmount().add(topupAmount));
         budget.setLastTopupTime(now);
         budgetRepository.save(budget);
 
-        // Step 7: Log transaction (no fee, so no revenue log)
-        TransactionLog transactionLog = new TransactionLog(
+        TransactionLog log = new TransactionLog(
                 user.getId(),
                 budgetId,
-                null, // No source envelope
-                null, // No target envelope
-                null, // No external account
+                null,
+                null,
+                null,
                 topupAmount,
-                BigDecimal.ZERO, // No fee
-                WALLET_DEDUCTION,
-                "Topped up budget from user wallet"
+                BigDecimal.ZERO,
+                BUDGET_TOP_UP,
+                "Budget top-up: " + budget.getName()
         );
-        transactionLog.setCreatedAt(now);
-        transactionLogRepository.save(transactionLog);
+        log.setCreatedAt(now);
+        transactionLogRepository.save(log);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
     }
 

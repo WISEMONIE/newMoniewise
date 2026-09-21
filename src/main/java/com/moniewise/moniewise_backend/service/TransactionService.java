@@ -61,7 +61,8 @@ public class TransactionService {
             // the transactions list even though the money moved.
             SAVINGS_WITHDRAWAL,
             SAVINGS_DEPOSIT,
-            USER_TO_USER
+            USER_TO_USER,
+            BUDGET_TOP_UP
     );
 
     private static final Set<TransactionType> USER_VISIBLE_OUTGOING_TYPES = EnumSet.of(
@@ -76,7 +77,8 @@ public class TransactionService {
             WALLET_WITHDRAWAL_FEE,
             WALLET_ENVELOPE_TRANSFER_FEE,
             WALLET_TO_BUDGET,
-            VAS_PURCHASE
+            VAS_PURCHASE,
+            BUDGET_TOP_UP
     );
 
     private static final Set<TransactionStatus> BALANCE_AFFECTING_STATUSES = EnumSet.of(

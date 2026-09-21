@@ -269,6 +269,8 @@ public class BudgetController {
             return ResponseEntity.ok("Budget topped up successfully");
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (com.moniewise.moniewise_backend.exception.InsufficientFundsException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (SecurityException e) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
         } catch (Exception e) {
