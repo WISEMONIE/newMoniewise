@@ -60,6 +60,11 @@ public class AdminBlogController {
         return ResponseEntity.ok(blogService.getPost(postId));
     }
 
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
+        return ResponseEntity.ok(blogService.uploadStandaloneFile(file));
+    }
+
     @PostMapping(value = "/{postId}/media", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<BlogPostResponse> uploadMedia(
             @PathVariable Long postId,

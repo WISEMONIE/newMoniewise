@@ -197,11 +197,53 @@ public class BlogService {
         logger.info("[Blog] Deleted media id={}", mediaId);
     }
 
+    public Map<String, Object> uploadStandaloneFile(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("File is required");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null) {
+            throw new IllegalArgumentException("Could not determine file type");
+        }
+        contentType = contentType.toLowerCase();
+
+        if (contentType.startsWith("image/")) {
+            if (!ALLOWED_IMAGE_TYPES.contains(contentType)) {
+                throw new IllegalArgumentException("Only JPG, PNG, WEBP, and GIF images are allowed");
+            }
+            if (file.getSize() > MAX_IMAGE_SIZE) {
+                throw new IllegalArgumentException("Images must be 10 MB or smaller");
+            }
+        } else if (contentType.startsWith("video/")) {
+            if (!ALLOWED_VIDEO_TYPES.contains(contentType)) {
+                throw new IllegalArgumentException("Only MP4, WEBM, and MOV videos are allowed");
+            }
+            if (file.getSize() > MAX_VIDEO_SIZE) {
+                throw new IllegalArgumentException("Videos must be 100 MB or smaller");
+            }
+        } else {
+            throw new IllegalArgumentException("Only image and video files are allowed");
+        }
+
+        String blobName = buildStandaloneBlobName(file);
+        String url = uploadBlobToFirebase(file, blobName);
+
+        return Map.of(
+                "url", url,
+                "fileName", blobName.substring(blobName.lastIndexOf('/') + 1),
+                "contentType", file.getContentType(),
+                "fileSize", file.getSize()
+        );
+    }
+
     // ── Firebase Storage ────────────────────────────────────────────
 
     private String uploadToFirebase(MultipartFile file, Long postId, String mediaType) {
+        return uploadBlobToFirebase(file, buildBlobName(file, postId, mediaType));
+    }
+
+    private String uploadBlobToFirebase(MultipartFile file, String blobName) {
         try {
-            String blobName = buildBlobName(file, postId, mediaType);
             Bucket bucket = StorageClient.getInstance().bucket();
 
             String downloadToken = UUID.randomUUID().toString();
@@ -229,6 +271,19 @@ public class BlogService {
             extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
         }
         return String.format("blog/%d/%s_%d.%s", postId, mediaType.toLowerCase(), System.currentTimeMillis(), extension);
+    }
+
+    private String buildStandaloneBlobName(MultipartFile file) {
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || originalFilename.isBlank()) {
+            originalFilename = "upload.bin";
+        }
+        String sanitized = originalFilename.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (sanitized.length() > 100) {
+            String ext = sanitized.contains(".") ? sanitized.substring(sanitized.lastIndexOf('.')) : "";
+            sanitized = sanitized.substring(0, 100 - ext.length()) + ext;
+        }
+        return String.format("blog/images/%d_%s", System.currentTimeMillis(), sanitized);
     }
 
     private void deleteFirebaseBlob(String blobName) {
