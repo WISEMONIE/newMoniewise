@@ -1,8 +1,5 @@
 package com.moniewise.moniewise_backend.security;
 
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import javax.servlet.FilterChain;
@@ -11,15 +8,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
-/**
- * Enforces JWT scope restrictions after authentication.
- *
- * A token with {@code scope=blog} can ONLY access {@code /admin/blog/**}.
- * Any attempt to use it on other endpoints gets a 403.
- * This prevents a blog admin token from accessing wallets, budgets, user data, etc.
- */
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 100)
 public class BlogScopeFilter extends OncePerRequestFilter {
 
     @Override
