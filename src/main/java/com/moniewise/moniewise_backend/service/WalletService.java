@@ -402,13 +402,11 @@ public class WalletService {
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user " + userId));
         BigDecimal balance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
         if (balance.compareTo(totalFee) < 0) {
+            BigDecimal shortfall = totalFee.subtract(balance);
             throw new IllegalStateException(String.format(
-                "Your wallet balance is not enough to cover the \u20A6%,.2f transfer charges " +
-                "(NIP fee: \u20A6%,.2f + Service fee: \u20A6%,.2f). " +
-                "Your dashboard total includes money in budgets and savings, but transfer charges " +
-                "can only be paid from your wallet balance. Please top up your wallet to continue. " +
+                "You need \u20A6%,.2f more in your wallet for this transfer. " +
                 "Wallet available: \u20A6%,.2f.",
-                totalFee, bankCharge, markupFee, balance));
+                shortfall, balance));
         }
         wallet.setBalance(balance.subtract(totalFee));
         wallet.setUpdatedAt(LocalDateTime.now());
@@ -498,30 +496,6 @@ public class WalletService {
         logger.info("[FeeRefund] ₦{} transfer fee refunded to wallet for user {} (transfer failed)",
                 totalFee, userId);
     }
-
-//    @Transactional
-//    public Wallet createWalletForUser(User user) {
-//        if (user.getId() == null) {
-//            throw new IllegalStateException("User must be saved before creating wallet");
-//        }
-//
-//        if (walletRepository.existsByUser(user)) {
-//            throw new IllegalStateException("Wallet already exists");
-//        }
-//
-//        Wallet wallet = new Wallet();
-//        wallet.setUser(user);
-//        wallet.setBalance(BigDecimal.ZERO);
-//        wallet.setCurrency("NGN");
-//        wallet.setStatus(WalletStatus.ACTIVE);
-//        wallet.setUpdatedAt(LocalDateTime.now());
-//
-//        Map<String, String> virtualAccount = paymentProvider.createVirtualAccount(user);
-//        wallet.setAccountNumber(virtualAccount.get("accountNumber"));
-//        wallet.setBankName(virtualAccount.get("bank"));
-//
-//        return walletRepository.save(wallet);
-//    }
 
     @Transactional
     public Wallet createWalletForUser(User user) {
@@ -1805,33 +1779,26 @@ public class WalletService {
     private String insufficientWithdrawalBalanceMessage(BigDecimal totalDebit,
                                                         BigDecimal fee,
                                                         BigDecimal walletBalance) {
-        String feePart = fee != null && fee.compareTo(BigDecimal.ZERO) > 0
-                ? " and its \u20A6" + formatMoney(fee) + " charges"
-                : "";
+        BigDecimal shortfall = totalDebit.subtract(walletBalance).max(BigDecimal.ZERO);
         return String.format(
-                "Your wallet balance is not enough to cover this withdrawal%s. "
-                        + "Your dashboard total includes budgets and savings, but withdrawals and fees "
-                        + "can only come from your wallet balance. Please top up your wallet to continue. "
-                        + "Wallet available: \u20A6%s. Total needed: \u20A6%s.",
-                feePart,
-                formatMoney(walletBalance),
-                formatMoney(totalDebit));
+                "You need \u20A6%,.2f more in your wallet for this withdrawal. "
+                        + "Wallet available: \u20A6%s.",
+                shortfall,
+                formatMoney(walletBalance));
     }
 
     private String insufficientWalletOnlyBalanceMessage(String actionDescription,
                                                         BigDecimal amountNeeded,
                                                         BigDecimal walletBalance) {
+        BigDecimal shortfall = amountNeeded.subtract(walletBalance).max(BigDecimal.ZERO);
         String action = actionDescription != null && !actionDescription.isBlank()
                 ? actionDescription
                 : "complete this transaction";
         return String.format(
-                "Your wallet balance is not enough to %s. "
-                        + "Your dashboard total includes money in budgets and savings, but this action can only use "
-                        + "money in your wallet balance. Please top up your wallet or reduce the amount to fit your wallet balance. "
-                        + "Wallet available: \u20A6%s. Amount needed: \u20A6%s.",
-                action,
-                formatMoney(walletBalance),
-                formatMoney(amountNeeded));
+                "You need \u20A6%,.2f more in your wallet to %s. "
+                        + "Wallet available: \u20A6%s.",
+                shortfall, action,
+                formatMoney(walletBalance));
     }
 
     private String formatMoney(BigDecimal amount) {

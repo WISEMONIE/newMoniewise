@@ -2139,13 +2139,11 @@ public class EnvelopeService {
             // Check wallet can cover the fees (show user now, before reaching review → PIN).
             BigDecimal walletBalance = safeAmount(wallet != null ? wallet.getBalance() : null);
             if (walletBalance.compareTo(totalFee) < 0) {
+                BigDecimal shortfall = totalFee.subtract(walletBalance);
                 throw new IllegalStateException(String.format(
-                        "Your wallet balance is not enough to cover the \u20A6%,.2f transfer charges "
-                                + "(NIP fee: \u20A6%,.2f + Service fee: \u20A6%,.2f). "
-                                + "Your dashboard total includes money in budgets and savings, but transfer charges "
-                                + "can only be paid from your wallet balance. Please top up your wallet to continue. "
+                        "You need \u20A6%,.2f more in your wallet for this transfer. "
                                 + "Wallet available: \u20A6%,.2f.",
-                        totalFee, bankCharge, markupFee, walletBalance));
+                        shortfall, walletBalance));
             }
 
             return new ExternalTransferQuoteResponse(
@@ -2200,12 +2198,11 @@ public class EnvelopeService {
         // Check wallet covers the service fee.
         BigDecimal legacyWalletBalance = safeAmount(wallet != null ? wallet.getBalance() : null);
         if (legacyWalletBalance.compareTo(fee) < 0) {
+            BigDecimal shortfall = fee.subtract(legacyWalletBalance);
             throw new IllegalStateException(String.format(
-                    "Your wallet balance is not enough to cover the \u20A6%,.2f service fee. "
-                            + "Your dashboard total includes money in budgets and savings, but transfer charges "
-                            + "can only be paid from your wallet balance. Please top up your wallet to continue. "
+                    "You need \u20A6%,.2f more in your wallet for the service fee. "
                             + "Wallet available: \u20A6%,.2f.",
-                    fee, legacyWalletBalance));
+                    shortfall, legacyWalletBalance));
         }
 
         if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementAccountNumber().isBlank()) {
