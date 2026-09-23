@@ -69,6 +69,7 @@ public class BudgetService {
     private final SystemConfigService systemConfig;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final RedisTemplate<String, String> redisTemplate;
+    private final FeeReserveService feeReserveService;
 
     /** Short-lived cache for read-heavy GET /budgets/{id}/envelopes calls. */
     private static final String ENVELOPES_CACHE_PREFIX = "envelopes:";
@@ -92,7 +93,8 @@ public class BudgetService {
             SavingsGoalRepository savingsGoalRepository,
             SystemConfigService systemConfig,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
-            RedisTemplate<String, String> redisTemplate) {
+            RedisTemplate<String, String> redisTemplate,
+            FeeReserveService feeReserveService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -111,6 +113,7 @@ public class BudgetService {
         this.systemConfig = systemConfig;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.redisTemplate = redisTemplate;
+        this.feeReserveService = feeReserveService;
     }
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetService.class);
@@ -1023,6 +1026,13 @@ public class BudgetService {
             }
 
             collectRubiesBudgetCreationFeeAfterCommit(user.getId(), fee, feeReference);
+        }
+
+        // === FEE RESERVE (pre-fund transfer fees from wallet surplus) ===
+        try {
+            feeReserveService.fundReserveForBudget(user, savedBudget, envelopes);
+        } catch (Exception e) {
+            logger.warn("[FeeReserve] Failed to fund reserve for budget {} — non-blocking", savedBudget.getId(), e);
         }
 
         // === NOTIFICATION ===

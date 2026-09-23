@@ -86,22 +86,31 @@ public class AuthSessionService {
 
     @Transactional
     public void attachFcmToken(String email, String sessionId, String token, String devicePlatform, String deviceId) {
-        AuthSession session = authSessionRepository.findByUserEmailAndSessionIdAndRevokedFalse(email, sessionId)
-                .orElseThrow(() -> new IllegalStateException("Active session not found"));
-
         String normalizedToken = normalizeToken(token);
         if (normalizedToken == null) {
             throw new IllegalArgumentException("FCM token is required");
         }
 
         String normalizedPlatform = normalizeDevicePlatform(devicePlatform);
-        authSessionRepository.clearTokenFromOtherSessions(normalizedToken, sessionId);
-        session.setFcmToken(normalizedToken);
-        session.setDevicePlatform(normalizedPlatform);
-        session.setLastSeenAt(LocalDateTime.now());
-        authSessionRepository.save(session);
+        AuthSession session = authSessionRepository.findByUserEmailAndSessionIdAndRevokedFalse(email, sessionId)
+                .orElse(null);
 
-        upsertDeviceToken(session.getUser(), sessionId, normalizedToken, normalizedPlatform, normalizeDeviceId(deviceId));
+        if (session != null) {
+            authSessionRepository.clearTokenFromOtherSessions(normalizedToken, sessionId);
+            session.setFcmToken(normalizedToken);
+            session.setDevicePlatform(normalizedPlatform);
+            session.setLastSeenAt(LocalDateTime.now());
+            authSessionRepository.save(session);
+            upsertDeviceToken(session.getUser(), sessionId, normalizedToken, normalizedPlatform, normalizeDeviceId(deviceId));
+        } else {
+            logger.warn("[FCM] No active session for email={} sessionId={}. Upserting device token via user lookup.", email, sessionId);
+            User user = userRepository.findByEmail(email).orElse(null);
+            if (user != null) {
+                upsertDeviceToken(user, sessionId, normalizedToken, normalizedPlatform, normalizeDeviceId(deviceId));
+            } else {
+                logger.error("[FCM] Cannot attach token — no user found for email={}", email);
+            }
+        }
     }
 
     @Transactional
@@ -150,7 +159,12 @@ public class AuthSessionService {
         }
 
         String fallbackToken = userRepository.findFcmTokenById(userId);
+        boolean hadTargetsBefore = !targets.isEmpty();
         addTarget(targets, fallbackToken, null);
+
+        if (!hadTargetsBefore && !targets.isEmpty()) {
+            logger.warn("[FCM] User {} reachable only via legacy User.fcmToken — migrate to UserDeviceToken.", userId);
+        }
 
         return List.copyOf(targets.values());
     }

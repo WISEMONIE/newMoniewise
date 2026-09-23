@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.controller;
 import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalQuoteRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
+import com.moniewise.moniewise_backend.dto.response.FeeReserveResponse;
 import com.moniewise.moniewise_backend.dto.response.WithdrawalQuoteResponse;
 import com.moniewise.moniewise_backend.dto.response.WalletResponse;
 import com.moniewise.moniewise_backend.entity.User;
@@ -10,6 +11,7 @@ import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.entity.Withdrawal;
 import com.moniewise.moniewise_backend.security.AuthenticatedUserHolder;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
+import com.moniewise.moniewise_backend.service.FeeReserveService;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import lombok.extern.slf4j.Slf4j;
@@ -36,15 +38,18 @@ public class WalletController {
     private final UserService userService;
     private final AbuseProtectionService abuseProtectionService;
     private final AuthenticatedUserHolder userHolder;
+    private final FeeReserveService feeReserveService;
 
     public WalletController(WalletService walletService,
                             UserService userService,
                             AbuseProtectionService abuseProtectionService,
-                            AuthenticatedUserHolder userHolder) {
+                            AuthenticatedUserHolder userHolder,
+                            FeeReserveService feeReserveService) {
         this.walletService = walletService;
         this.userService = userService;
         this.abuseProtectionService = abuseProtectionService;
         this.userHolder = userHolder;
+        this.feeReserveService = feeReserveService;
     }
 
     /** Returns the current user from the request-scoped holder (populated by the JWT filter).
@@ -340,5 +345,13 @@ public class WalletController {
             abuseProtectionService.recordFailure(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
             return ResponseEntity.internalServerError().body(Map.of("status", false, "error", e.getMessage()));
         }
+    }
+
+    @GetMapping("/fee-reserve")
+    public ResponseEntity<?> getFeeReserve(Authentication authentication) {
+        User user = currentUser(authentication.getName());
+        var reserve = feeReserveService.getReserve(user.getId());
+        var estimates = feeReserveService.getActiveEstimates(user.getId());
+        return ResponseEntity.ok(FeeReserveResponse.from(reserve, estimates));
     }
 }

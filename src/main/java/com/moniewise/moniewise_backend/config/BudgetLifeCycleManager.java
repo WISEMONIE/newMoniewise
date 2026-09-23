@@ -11,6 +11,7 @@ import com.moniewise.moniewise_backend.service.ActivationJourneyNudgeService;
 import com.moniewise.moniewise_backend.service.BadgeAwardService;
 import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
+import com.moniewise.moniewise_backend.service.FeeReserveService;
 import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.SavingsService;
@@ -76,6 +77,7 @@ public class BudgetLifeCycleManager {
     private final SavingsService savingsService;
     private final BadgeAwardService badgeAwardService;
     private final ActivationJourneyNudgeService activationJourneyNudgeService;
+    private final FeeReserveService feeReserveService;
 
     private final OutboxEventRepository outboxEventRepository;
 
@@ -102,7 +104,8 @@ public class BudgetLifeCycleManager {
             SavingsGoalRepository savingsGoalRepository,
             SavingsService savingsService,
             BadgeAwardService badgeAwardService,
-            ActivationJourneyNudgeService activationJourneyNudgeService) {
+            ActivationJourneyNudgeService activationJourneyNudgeService,
+            @Lazy FeeReserveService feeReserveService) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -121,6 +124,7 @@ public class BudgetLifeCycleManager {
         this.savingsService = savingsService;
         this.badgeAwardService = badgeAwardService;
         this.activationJourneyNudgeService = activationJourneyNudgeService;
+        this.feeReserveService = feeReserveService;
     }
 
     @PostConstruct
@@ -1100,6 +1104,13 @@ public class BudgetLifeCycleManager {
                 payload
         ));
 
+        try {
+            feeReserveService.releaseForBudget(user.getId(), budget.getId());
+        } catch (Exception e) {
+            logger.warn("[FeeReserve] Failed to release reserve for completed budget {} — non-blocking",
+                    budget.getId(), e);
+        }
+
         budget.setStatus(BudgetStatus.COMPLETED);
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetsToUpdate.add(budget);
@@ -2078,6 +2089,14 @@ public class BudgetLifeCycleManager {
                     false
             );
         }
+
+        try {
+            feeReserveService.releaseForBudget(user.getId(), budget.getId());
+        } catch (Exception e) {
+            logger.warn("[FeeReserve] Failed to release reserve for cancelled budget {} — non-blocking",
+                    budget.getId(), e);
+        }
+
         return totalRefunded;
     }
 

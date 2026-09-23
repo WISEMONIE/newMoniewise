@@ -76,6 +76,7 @@ public class WalletService {
     private final SystemConfigService systemConfigService;
     private final RedisTemplate<String, String> redisTemplate;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final FeeReserveService feeReserveService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -118,7 +119,8 @@ public class WalletService {
             EnvelopeRepository envelopeRepository,
             SystemConfigService systemConfigService,
             RedisTemplate<String, String> redisTemplate,
-            MonnieCacheInvalidationService monnieCacheInvalidationService) {
+            MonnieCacheInvalidationService monnieCacheInvalidationService,
+            @Lazy FeeReserveService feeReserveService) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
@@ -137,6 +139,7 @@ public class WalletService {
         this.systemConfigService = systemConfigService;
         this.redisTemplate = redisTemplate;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
+        this.feeReserveService = feeReserveService;
     }
 
     /**
@@ -1251,7 +1254,21 @@ public class WalletService {
         BigDecimal stampDuty = RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())
                 ? markupCalculatorService.calculateStampDuty(request.getAmount())
                 : BigDecimal.ZERO;
-        BigDecimal totalDebit = request.getAmount().add(nipFee).add(transferFee).add(stampDuty);
+        BigDecimal totalFees = nipFee.add(transferFee).add(stampDuty);
+        BigDecimal totalDebit = request.getAmount().add(totalFees);
+
+        // Move fee reserve funds to wallet so the normal withdrawal flow can
+        // deduct totalDebit from wallet without modification. On transfer failure
+        // markWithdrawalFailed() credits totalDebit back — the reserve portion
+        // stays in the wallet, which is correct (user's money either way).
+        try {
+            feeReserveService.coverFeesFromReserve(userId, totalFees);
+        } catch (Exception e) {
+            logger.warn("[FeeReserve] Reserve fee cover failed for user {} — fees from wallet only", userId, e);
+        }
+        // Re-read wallet after potential reserve top-up
+        wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
 
         if (wallet.getBalance().compareTo(totalDebit) < 0) {
             if (nipFee.compareTo(BigDecimal.ZERO) > 0) {
