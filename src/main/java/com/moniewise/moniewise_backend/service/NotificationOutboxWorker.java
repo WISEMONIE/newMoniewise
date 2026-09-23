@@ -60,8 +60,8 @@ public class NotificationOutboxWorker {
         try {
             ids = self.claimBatch();
         } catch (Exception e) {
-            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
-                logger.warn("[OUTBOX] DB pool busy; skipping this delivery tick: {}",
+            if (ExceptionClassifier.isTransientConnectionError(e)) {
+                logger.warn("[OUTBOX] Transient DB connection error; skipping this delivery tick: {}",
                         ExceptionClassifier.rootCauseMessage(e));
                 return;
             }
@@ -105,8 +105,8 @@ public class NotificationOutboxWorker {
                 breakdown.append(row[0]).append('=').append(row[1]);
             }
         } catch (Exception e) {
-            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
-                logger.warn("[OUTBOX] DB pool busy; skipping dead-letter check: {}",
+            if (ExceptionClassifier.isTransientConnectionError(e)) {
+                logger.warn("[OUTBOX] Transient DB connection error; skipping dead-letter check: {}",
                         ExceptionClassifier.rootCauseMessage(e));
                 return;
             }

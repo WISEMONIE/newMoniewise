@@ -33,7 +33,7 @@ spring:
       minimum-idle: ${HIKARI_MIN_IDLE:5}
       connection-timeout: ${HIKARI_CONNECTION_TIMEOUT:20000}
       idle-timeout: ${HIKARI_IDLE_TIMEOUT:300000}
-      max-lifetime: ${HIKARI_MAX_LIFETIME:900000}
+      max-lifetime: ${HIKARI_MAX_LIFETIME:600000}
       leak-detection-threshold: ${HIKARI_LEAK_DETECTION:30000}
       keepalive-time: ${HIKARI_KEEPALIVE:60000}
 

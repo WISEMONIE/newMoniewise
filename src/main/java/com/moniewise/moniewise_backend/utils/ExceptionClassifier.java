@@ -1,5 +1,7 @@
 package com.moniewise.moniewise_backend.utils;
 
+import java.io.EOFException;
+import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
 import java.util.Locale;
 
@@ -22,6 +24,27 @@ public final class ExceptionClassifier {
                     && containsIgnoreCase(message, "Connection is not available"))
                     || (containsIgnoreCase(message, "Connection is not available")
                     && containsIgnoreCase(message, "request timed out"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    public static boolean isTransientConnectionError(Throwable throwable) {
+        if (isDatabasePoolExhausted(throwable)) return true;
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof EOFException) return true;
+            if (current instanceof SQLException) {
+                String state = ((SQLException) current).getSQLState();
+                if (state != null && state.startsWith("08")) return true;
+            }
+            String message = current.getMessage();
+            if (containsIgnoreCase(message, "connection has been closed")
+                    || containsIgnoreCase(message, "connection is closed")
+                    || containsIgnoreCase(message, "An I/O error occurred while sending to the backend")
+                    || containsIgnoreCase(message, "Unable to commit against JDBC Connection")) {
                 return true;
             }
             current = current.getCause();
