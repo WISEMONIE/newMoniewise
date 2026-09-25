@@ -9,6 +9,7 @@ import java.util.Optional;
 
 @Repository
 public interface RevenueLogRepository extends JpaRepository<RevenueLog, Long> {
-    // Basic CRUD provided by JpaRepository
+
+    boolean existsByDescriptionContaining(String fragment);
 
 }

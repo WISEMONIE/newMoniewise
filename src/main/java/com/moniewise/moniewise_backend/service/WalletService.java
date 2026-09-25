@@ -2057,6 +2057,47 @@ public class WalletService {
                     log.setStatus(TransactionStatus.COMPLETED);
                     transactionLogRepository.save(log);
                 });
+
+                // ── 4. Credit revenue wallet now that the money actually moved ───
+                // VAS payments move the full selling amount (cost + margin); VAS
+                // margin revenue is tracked separately by logVasMarkupRevenue().
+                // Only markup-fee and budget-fee collections credit the revenue wallet.
+                if (txnType != TransactionType.VAS_PAYMENT_COLLECTION) {
+                    try {
+                        // Guard: skip if a RevenueLog for this reference already exists
+                        // (covers historical transactions credited under the old optimistic path).
+                        if (revenueLogRepository.existsByDescriptionContaining(originalRef)) {
+                            logger.info("[Rubies-Fee] Revenue already credited for ref={} — skipping duplicate", revRef);
+                        } else {
+                            walletRepository.findByRevenueWalletTrue().ifPresent(revenueWallet -> {
+                                revenueWallet.setBalance(revenueWallet.getBalance().add(feeAmount));
+                                revenueWallet.setUpdatedAt(LocalDateTime.now());
+                                walletRepository.save(revenueWallet);
+
+                                String revenueType = txnType == TransactionType.BUDGET_FEE_COLLECTION
+                                        ? "budget_creation_fee"
+                                        : originalRef.startsWith("EXT-") || originalRef.startsWith("AUTO-EXT-")
+                                                ? "envelope_external_transfer_fee"
+                                                : "transfer_markup_fee";
+
+                                RevenueLog revenueLog = new RevenueLog();
+                                revenueLog.setUserId(revUserId);
+                                revenueLog.setType(revenueType);
+                                revenueLog.setAmount(feeAmount);
+                                revenueLog.setDescription(label + " for " + originalRef + " — user " + revUserId);
+                                revenueLog.setCreatedAt(LocalDateTime.now());
+                                revenueLogRepository.save(revenueLog);
+
+                                logger.info("[Rubies-Fee] ₦{} {} credited to revenue wallet after successful collection. ref={}",
+                                        feeAmount, label.toLowerCase(Locale.ROOT), revRef);
+                            });
+                        }
+                    } catch (Exception revEx) {
+                        logger.error("[Rubies-Fee] Fee collected but revenue credit failed for ref={}: {}",
+                                revRef, revEx.getMessage());
+                    }
+                }
+
                 logger.info("[Rubies-Fee] ₦{} {} transferred to revenue wallet. ref={}",
                         feeAmount, label.toLowerCase(Locale.ROOT), revRef);
 
@@ -2421,26 +2462,11 @@ public class WalletService {
                         ? withdrawal.getFeeAmount() : BigDecimal.ZERO;
 
                 if (markupFee.compareTo(BigDecimal.ZERO) > 0) {
-                    // 1. Credit the internal revenue wallet (accounting ledger).
-                    walletRepository.findByRevenueWalletTrue().ifPresent(revenueWallet -> {
-                        revenueWallet.setBalance(revenueWallet.getBalance().add(markupFee));
-                        revenueWallet.setUpdatedAt(LocalDateTime.now());
-                        walletRepository.save(revenueWallet);
+                    // Revenue credit is deferred: only credited when the Rubies P2P fee
+                    // collection actually succeeds (inside collectRubiesToRevenueAsync).
+                    // This prevents the ledger from claiming money that was never collected.
 
-                        RevenueLog revenueLog = new RevenueLog();
-                        revenueLog.setUserId(withdrawal.getUserId());
-                        revenueLog.setType("transfer_markup_fee");
-                        revenueLog.setAmount(markupFee);
-                        revenueLog.setDescription("Markup fee for transfer " + withdrawal.getClientReference()
-                                + " — user " + withdrawal.getUserId());
-                        revenueLog.setCreatedAt(LocalDateTime.now());
-                        revenueLogRepository.save(revenueLog);
-
-                        logger.info("[RUBIES] Markup fee ₦{} credited to revenue wallet for ref={}",
-                                markupFee, withdrawal.getClientReference());
-                    });
-
-                    // 2. Fire-and-forget: actually move the markup fee from the user's
+                    // Fire-and-forget: actually move the markup fee from the user's
                     //    Rubies wallet into Moniewise's own Rubies revenue wallet.
                     //    Done HERE (on confirmed success) — NOT at initiation time —
                     //    so we never collect a fee for a transfer that Rubies rejected.

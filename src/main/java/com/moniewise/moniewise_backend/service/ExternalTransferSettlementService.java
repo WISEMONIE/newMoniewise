@@ -111,28 +111,11 @@ public class ExternalTransferSettlementService {
                         parentBudget.getId(), transferAmount, txn.getReference());
             }
 
-            // Bug-fix: credit the markup fee to the platform revenue wallet (was never done
-            // for envelope external transfers, only for wallet withdrawals).
+            // Revenue credit is deferred: only credited when the Rubies P2P fee
+            // collection actually succeeds (inside collectRubiesToRevenueAsync).
+            // This prevents the ledger from claiming money that was never collected.
             if (fee.compareTo(BigDecimal.ZERO) > 0) {
-                walletRepository.findByRevenueWalletTrue().ifPresent(revenueWallet -> {
-                    revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
-                    revenueWallet.setUpdatedAt(LocalDateTime.now());
-                    walletRepository.save(revenueWallet);
-
-                    RevenueLog revenueLog = new RevenueLog();
-                    revenueLog.setUserId(txn.getUserId());
-                    revenueLog.setType("envelope_external_transfer_fee");
-                    revenueLog.setAmount(fee);
-                    revenueLog.setDescription("Transfer fee for envelope external transfer "
-                            + txn.getReference() + " — user " + txn.getUserId());
-                    revenueLog.setCreatedAt(LocalDateTime.now());
-                    revenueLogRepository.save(revenueLog);
-
-                    logger.info("[ExternalTransfer] Fee ₦{} credited to revenue wallet for ref={}",
-                            fee, txn.getReference());
-                });
-
-                // Fire-and-forget: physically move the markup fee from the user's Rubies wallet
+                // Physically move the markup fee from the user's Rubies wallet
                 // to Moniewise's Rubies revenue wallet.
                 // This is done HERE (on confirmed webhook success) — NOT at initiation time.
                 // If the transfer had failed, the fee amount would still be in the user's wallet
@@ -436,15 +419,7 @@ public class ExternalTransferSettlementService {
     public int retryFailedFeeCollections() {
         // Candidate set: COMPLETED EXT- transfers that had a markup fee
         java.util.List<TransactionLog> candidates = transactionLogRepository
-                .findAll()
-                .stream()
-                .filter(t -> t.getStatus() == TransactionStatus.COMPLETED
-                        && t.getSourceEnvelopeId() != null
-                        && t.getReference() != null
-                        && !t.getReference().endsWith("-FEE")
-                        && t.getFee() != null
-                        && t.getFee().compareTo(java.math.BigDecimal.ZERO) > 0)
-                .collect(java.util.stream.Collectors.toList());
+                .findCompletedTransfersWithFees();
 
         int retried = 0;
 

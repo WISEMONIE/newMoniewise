@@ -313,4 +313,14 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
             @Param("cutoff") java.time.LocalDateTime cutoff
     );
 
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.status = com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED
+          AND t.sourceEnvelopeId IS NOT NULL
+          AND t.fee IS NOT NULL
+          AND t.fee > 0
+          AND t.reference NOT LIKE '%-FEE'
+        """)
+    List<TransactionLog> findCompletedTransfersWithFees();
+
 }
