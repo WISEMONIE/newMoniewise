@@ -70,11 +70,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
         "   lower(coalesce(u.email, '')) LIKE lower(concat('%', :query, '%')) " +
         "   OR coalesce(u.phone, '') LIKE concat('%', :query, '%') " +
         "   OR lower(coalesce(u.profile_data ->> 'userTag', '')) LIKE lower(concat('%', :query, '%'))" +
+        "   OR coalesce(w.account_number, '') LIKE concat('%', :query, '%')" +
         ") AND coalesce(u.is_deleted, false) = false",
-        countQuery = "SELECT count(*) FROM users u WHERE (" +
+        countQuery = "SELECT count(*) FROM users u " +
+                "LEFT JOIN wallets w ON w.user_id = u.id " +
+                "WHERE (" +
                 "   lower(coalesce(u.email, '')) LIKE lower(concat('%', :query, '%')) " +
                 "   OR coalesce(u.phone, '') LIKE concat('%', :query, '%') " +
                 "   OR lower(coalesce(u.profile_data ->> 'userTag', '')) LIKE lower(concat('%', :query, '%'))" +
+                "   OR coalesce(w.account_number, '') LIKE concat('%', :query, '%')" +
                 ") AND coalesce(u.is_deleted, false) = false",
         nativeQuery = true)
 List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
