@@ -1384,6 +1384,7 @@ public class BudgetService {
                 BUDGET_TOP_UP,
                 "Budget top-up: " + budget.getName()
         );
+        log.setStatus(TransactionStatus.COMPLETED);
         log.setCreatedAt(now);
         transactionLogRepository.save(log);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
