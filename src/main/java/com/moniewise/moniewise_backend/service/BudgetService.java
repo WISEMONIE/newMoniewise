@@ -1439,6 +1439,7 @@ public class BudgetService {
                 BUDGET_EXTENSION,
                 "Extended budget end date to " + newEndDate
         );
+        transactionLog.setStatus(TransactionStatus.COMPLETED);
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());

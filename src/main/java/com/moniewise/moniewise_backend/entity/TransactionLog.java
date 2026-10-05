@@ -404,6 +404,7 @@ public class TransactionLog {
         this.amount = amount;
         this.transactionType = transactionType;
         this.description = description;
+        this.status = TransactionStatus.COMPLETED;
     }
 
     public TransactionLog(
@@ -426,6 +427,7 @@ public class TransactionLog {
         this.fee = fee;
         this.transactionType = transactionType;
         this.description = description;
+        this.status = TransactionStatus.COMPLETED;
     }
 
     public static TransactionLogBuilder builder() {
