@@ -1384,6 +1384,7 @@ public class BudgetService {
                 BUDGET_TOP_UP,
                 "Budget top-up: " + budget.getName()
         );
+        log.setReference("BUD-TOP-" + budgetId + "-" + System.currentTimeMillis());
         log.setStatus(TransactionStatus.COMPLETED);
         log.setCreatedAt(now);
         transactionLogRepository.save(log);
@@ -1439,6 +1440,7 @@ public class BudgetService {
                 BUDGET_EXTENSION,
                 "Extended budget end date to " + newEndDate
         );
+        transactionLog.setReference("BUD-EXT-" + budgetId + "-" + System.currentTimeMillis());
         transactionLog.setStatus(TransactionStatus.COMPLETED);
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
