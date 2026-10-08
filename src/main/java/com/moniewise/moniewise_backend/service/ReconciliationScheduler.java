@@ -26,4 +26,12 @@ public class ReconciliationScheduler {
         }
         reconciliationService.runDailyReconciliation(providerName);
     }
+
+    @Scheduled(cron = "${moniewise.reconciliation.revenue-wallet.cron:0 30 6 * * ?}", zone = "Africa/Lagos")
+    public void runRevenueWalletReconciliation() {
+        if (!schedulerEnabled) {
+            return;
+        }
+        reconciliationService.reconcileRevenueWallet();
+    }
 }

@@ -5,10 +5,16 @@ import com.moniewise.moniewise_backend.dto.KycProfileResponseDto;
 import com.moniewise.moniewise_backend.dto.PendingRegistrationData;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.entity.KycProfile;
+import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.enums.TransactionStatus;
+import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.KycProfileRepository;
+import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.repository.WalletRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -16,6 +22,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -30,22 +38,34 @@ public class KycService {
     private final SecureWavePaymentProvider secureWavePaymentProvider;
     private final RubiesGateway rubiesGateway;
     private final RegistrationCacheService registrationCacheService;
+    private final WalletRepository walletRepository;
+    private final TransactionLogRepository transactionLogRepository;
 
     @Value("${moniewise.kyc.rubies-fallback.enabled:true}")
     private boolean rubiesBvnFallbackEnabled;
+
+    @Value("${moniewise.kyc.bvn-fee:70}")
+    private BigDecimal bvnVerificationFee;
+
+    @Value("${moniewise.revenue.wallet.user-id}")
+    private Long revenueWalletUserId;
 
     public KycService(
             KycProfileRepository kycProfileRepository,
             UserRepository userRepository,
             SecureWavePaymentProvider secureWavePaymentProvider,
             RubiesGateway rubiesGateway,
-            RegistrationCacheService registrationCacheService
+            RegistrationCacheService registrationCacheService,
+            WalletRepository walletRepository,
+            TransactionLogRepository transactionLogRepository
     ) {
         this.kycProfileRepository = kycProfileRepository;
         this.userRepository = userRepository;
         this.secureWavePaymentProvider = secureWavePaymentProvider;
         this.rubiesGateway = rubiesGateway;
         this.registrationCacheService = registrationCacheService;
+        this.walletRepository = walletRepository;
+        this.transactionLogRepository = transactionLogRepository;
     }
 
     // ── Profile CRUD ──────────────────────────────────────────────────────────
@@ -234,6 +254,9 @@ public class KycService {
 
         log.info("[KYC] BVN verification persisted for userId={}", userId);
 
+        // Record the BaaS KYC fee as a deduction from the revenue wallet
+        recordBvnVerificationFee(userId);
+
         // Stamp internal status onto the result DTO before returning
         result.setKycStatus(KycProfile.KycStatus.VERIFIED);
         result.setBvnVerified(true);
@@ -266,6 +289,42 @@ public class KycService {
             profile.setKycStatus(KycProfile.KycStatus.REJECTED);
             kycProfileRepository.save(profile);
         });
+    }
+
+    // ── BaaS KYC fee recording ─────────────────────────────────────────────
+
+    /**
+     * Deducts the BaaS BVN verification fee from the revenue wallet and
+     * records a transaction log entry. Must be called within a transactional
+     * context (e.g. from {@link #verifyBvnWithProvider}).
+     */
+    private void recordBvnVerificationFee(Long verifiedUserId) {
+        if (bvnVerificationFee == null || bvnVerificationFee.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+
+        Wallet revenueWallet = walletRepository.findByUserId(revenueWalletUserId)
+                .orElse(null);
+        if (revenueWallet == null) {
+            log.warn("[KYC] Revenue wallet not found for user-id={} — cannot record BVN fee", revenueWalletUserId);
+            return;
+        }
+
+        revenueWallet.setBalance(revenueWallet.getBalance().subtract(bvnVerificationFee));
+        walletRepository.save(revenueWallet);
+
+        TransactionLog feeLog = new TransactionLog();
+        feeLog.setUserId(revenueWalletUserId);
+        feeLog.setAmount(bvnVerificationFee);
+        feeLog.setTransactionType(TransactionType.KYC_BVN_FEE);
+        feeLog.setStatus(TransactionStatus.COMPLETED);
+        feeLog.setCreatedAt(LocalDateTime.now());
+        feeLog.setReference("KYC-BVN-" + verifiedUserId + "-" + System.currentTimeMillis());
+        feeLog.setDescription("BaaS BVN verification fee for user " + verifiedUserId);
+        transactionLogRepository.save(feeLog);
+
+        log.info("[KYC] Recorded BVN verification fee ₦{} on revenue wallet (verifiedUser={})",
+                bvnVerificationFee, verifiedUserId);
     }
 
     // ── Provider fallback ────────────────────────────────────────────────────

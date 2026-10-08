@@ -85,6 +85,9 @@ public class ReconciliationService {
     @Value("${moniewise.reconciliation.auto-heal-max:50000}")
     private BigDecimal autoHealMax;
 
+    @Value("${moniewise.revenue.wallet.user-id}")
+    private Long revenueWalletUserId;
+
     public ReconciliationService(
             ReconciliationRunRepository reconciliationRunRepository,
             ReconciliationItemRepository reconciliationItemRepository,
@@ -193,6 +196,63 @@ public class ReconciliationService {
                 "holds mixed revenue and VAS operating float. Track VAS payouts to restore.");
         summary.put("internalRevenueBalance", revenueWalletBalance);
         return summary;
+    }
+
+    /**
+     * Compares the revenue wallet's DB balance against its Rubies BaaS balance.
+     * Logs a warning when a gap is detected, recording the difference for review.
+     */
+    public Map<String, Object> reconcileRevenueWallet() {
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("scope", "revenueWalletBaaSCheck");
+
+        Wallet revenueWallet = walletRepository.findByUserId(revenueWalletUserId).orElse(null);
+        if (revenueWallet == null) {
+            report.put("status", "NO_WALLET");
+            report.put("message", "Revenue wallet not found for user-id " + revenueWalletUserId);
+            return report;
+        }
+
+        PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(revenueWallet);
+        String providerRef = firstNonBlank(
+                revenueWallet.getProviderWalletRef(), revenueWallet.getSubWalletRef());
+
+        if (providerRef == null) {
+            report.put("status", "NO_PROVIDER_REF");
+            report.put("message", "Revenue wallet has no provider reference — cannot query BaaS.");
+            return report;
+        }
+
+        Optional<BigDecimal> baasBalance = gateway.fetchWalletBalance(providerRef);
+        if (baasBalance.isEmpty()) {
+            report.put("status", "PROVIDER_UNREACHABLE");
+            report.put("message", "Could not fetch BaaS balance for revenue wallet (" + providerRef + ")");
+            return report;
+        }
+
+        BigDecimal dbBalance = revenueWallet.getBalance() != null
+                ? revenueWallet.getBalance() : BigDecimal.ZERO;
+        BigDecimal difference = dbBalance.subtract(baasBalance.get());
+        BigDecimal gap = difference.abs();
+
+        report.put("dbBalance", dbBalance);
+        report.put("baasBalance", baasBalance.get());
+        report.put("difference", difference);
+        report.put("providerRef", providerRef);
+
+        if (gap.compareTo(HOLDINGS_TOLERANCE) <= 0) {
+            report.put("status", "OK");
+            logger.info("[Recon] Revenue wallet OK — DB={}, BaaS={}", dbBalance, baasBalance.get());
+        } else {
+            report.put("status", "MISMATCH");
+            report.put("message", String.format(
+                    "Revenue wallet gap detected: DB=₦%s, BaaS=₦%s, difference=₦%s. " +
+                    "Likely unrecorded BaaS fees (KYC/BVN, NIP charges).",
+                    dbBalance, baasBalance.get(), difference));
+            logger.warn("[Recon] REVENUE WALLET MISMATCH — DB={}, BaaS={}, gap={}",
+                    dbBalance, baasBalance.get(), difference);
+        }
+        return report;
     }
 
     @Transactional

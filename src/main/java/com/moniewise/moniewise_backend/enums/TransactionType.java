@@ -77,6 +77,14 @@ public enum TransactionType {
      * User-facing wallet credit created by the reconciliation self-healer after
      * proving Rubies received a credit webhook we never processed.
      */
-    RECONCILIATION_CREDIT
+    RECONCILIATION_CREDIT,
+
+    /**
+     * Internal deduction from the revenue wallet to record the BaaS KYC/BVN
+     * verification fee charged by Rubies at the provider level.
+     * Platform-internal — must NOT appear in user-facing transaction history.
+     * Reference pattern: KYC-BVN-{userId}-{timestamp}
+     */
+    KYC_BVN_FEE
 
     }
