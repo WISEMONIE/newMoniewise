@@ -24,8 +24,7 @@ public class DataPurchaseRequest {
     @Size(min = 11, max = 20, message = "Mobile number must be between 11 and 20 digits")
     private String mobileNumber;
 
-    /** Budget envelope the purchase is funded from (the money leaves this envelope). */
-    @NotNull(message = "Funding envelope is required")
+    /** Budget envelope the purchase is funded from. Null = fund from wallet balance. */
     private Long envelopeId;
 
     @NotBlank(message = "Transaction PIN is required")

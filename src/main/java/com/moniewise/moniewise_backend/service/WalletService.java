@@ -595,6 +595,158 @@ public class WalletService {
         fundWallet(userId, amount, notificationMessage, false);
     }
 
+    // ======================== WALLET P2P TRANSFER ========================
+
+    private static final String RUBIES_BANK_CODE = "090175";
+    private static final String RUBIES_BANK_NAME = "Rubies MFB";
+
+    @Transactional
+    public void transferFromWalletToUser(com.moniewise.moniewise_backend.dto.request.WalletP2PTransferRequest request,
+                                         String senderEmail) {
+        BigDecimal amount = request.getAmount();
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+
+        User sender = userService.findByEmail(senderEmail);
+
+        if (!userService.verifyTransactionPin(sender, request.getTransactionPin())) {
+            throw new IllegalArgumentException("Invalid transaction PIN");
+        }
+
+        User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
+                .orElseThrow(() -> new IllegalArgumentException("Recipient not found on Wisemonie"));
+
+        if (sender.getId().equals(recipient.getId())) {
+            throw new IllegalArgumentException("You cannot transfer to yourself");
+        }
+
+        Wallet senderWallet = walletRepository.findByUserIdForUpdate(sender.getId())
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+
+        if (senderWallet.getBalance().compareTo(amount) < 0) {
+            String message = insufficientWalletOnlyBalanceMessage("complete this transfer", amount, senderWallet.getBalance());
+            throw new com.moniewise.moniewise_backend.exception.InsufficientFundsException(message);
+        }
+
+        senderWallet.setBalance(senderWallet.getBalance().subtract(amount));
+        walletRepository.save(senderWallet);
+
+        LocalDateTime now = LocalDateTime.now();
+        String senderName = resolveDisplayName(sender);
+        String recipientName = resolveDisplayName(recipient);
+
+        boolean rubiesBacked = isRubiesBacked(sender, recipient);
+        String providerReference = null;
+        String logRefPrefix = "WP2P-DB-";
+        String logCrRefPrefix = "WP2P-CR-";
+        String logProviderName = null;
+
+        if (rubiesBacked) {
+            Wallet recipientWallet = getWalletByUserId(recipient.getId());
+            String p2pReference = "WP2P-RB-" + sender.getId() + "-" + System.currentTimeMillis();
+
+            PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(
+                    com.moniewise.moniewise_backend.psp.rubies.RubiesGateway.PROVIDER_NAME);
+            try {
+                providerReference = gateway.initiateTransferWithContext(
+                        senderWallet.getProviderWalletRef(),
+                        senderName,
+                        RUBIES_BANK_CODE,
+                        RUBIES_BANK_NAME,
+                        recipientWallet.getProviderWalletRef(),
+                        recipientName,
+                        amount,
+                        p2pReference,
+                        "Wisemonie Wallet P2P: " + senderName + " to " + recipientName
+                );
+            } catch (RuntimeException ex) {
+                senderWallet.setBalance(senderWallet.getBalance().add(amount));
+                walletRepository.save(senderWallet);
+
+                String rawCause = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+                if (rawCause.contains("insufficient float") || rawCause.contains("not enough float")
+                        || (rawCause.contains("insufficient balance") && rawCause.contains("rubies"))) {
+                    throw new RuntimeException(
+                            "Transfer temporarily unavailable. Please try again in a few minutes or contact support.");
+                }
+                throw ex;
+            }
+
+            logRefPrefix = "WP2P-RB-DB-";
+            logCrRefPrefix = "WP2P-RB-CR-";
+            logProviderName = com.moniewise.moniewise_backend.psp.rubies.RubiesGateway.PROVIDER_NAME;
+
+        } else {
+            fundWallet(recipient.getId(), amount, null, true);
+        }
+
+        String baseRef = providerReference != null && !providerReference.isBlank()
+                ? providerReference
+                : recipient.getId() + "-" + System.currentTimeMillis();
+
+        String description = request.getNote() != null && !request.getNote().isBlank()
+                ? request.getNote()
+                : "Transfer to " + recipientName;
+
+        TransactionLog senderLog = TransactionLog.builder()
+                .userId(sender.getId())
+                .counterpartyUserId(recipient.getId())
+                .amount(amount.negate())
+                .fee(BigDecimal.ZERO)
+                .transactionType(TransactionType.WALLET_TO_USER)
+                .status(TransactionStatus.COMPLETED)
+                .reference(logRefPrefix + baseRef)
+                .providerName(logProviderName)
+                .providerReference(providerReference)
+                .description(description)
+                .createdAt(now)
+                .build();
+        transactionLogRepository.save(senderLog);
+
+        TransactionLog recipientLog = TransactionLog.builder()
+                .userId(recipient.getId())
+                .counterpartyUserId(sender.getId())
+                .amount(amount)
+                .fee(BigDecimal.ZERO)
+                .transactionType(TransactionType.USER_TO_USER)
+                .status(TransactionStatus.COMPLETED)
+                .reference(logCrRefPrefix + baseRef)
+                .providerName(logProviderName)
+                .providerReference(providerReference)
+                .description("Received from " + senderName)
+                .createdAt(now)
+                .build();
+        transactionLogRepository.save(recipientLog);
+
+        if (!rubiesBacked) {
+            notificationService.sendNotification(
+                    recipient.getId().toString(),
+                    senderName + " sent you ₦" + String.format("%,.2f", amount),
+                    NotificationType.WALLET_DEPOSIT,
+                    null, null, "VIEW_WALLET", "/dashboard"
+            );
+        }
+
+        monnieCacheInvalidationService.evictUserAfterCommit(sender.getId());
+        monnieCacheInvalidationService.evictUserAfterCommit(recipient.getId());
+
+        logger.info("[Wallet-P2P] ₦{} transferred from user {} to user {} (rubies={})",
+                amount, sender.getId(), recipient.getId(), rubiesBacked);
+    }
+
+    private boolean isRubiesBacked(User sender, User recipient) {
+        try {
+            Wallet sw = getWalletByUserId(sender.getId());
+            Wallet rw = getWalletByUserId(recipient.getId());
+            return sw != null && rw != null
+                    && com.moniewise.moniewise_backend.psp.rubies.RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(sw.getProviderName())
+                    && com.moniewise.moniewise_backend.psp.rubies.RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(rw.getProviderName());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public void fundWalletFromWebhook(String payloadJson) {
         try {
             JsonNode root = objectMapper.readTree(payloadJson);

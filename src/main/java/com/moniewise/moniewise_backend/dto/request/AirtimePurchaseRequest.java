@@ -31,8 +31,7 @@ public class AirtimePurchaseRequest {
     @DecimalMax(value = "5000", message = "Maximum airtime purchase is ₦5,000")
     private BigDecimal amount;
 
-    /** Budget envelope the purchase is funded from (the money leaves this envelope). */
-    @NotNull(message = "Funding envelope is required")
+    /** Budget envelope the purchase is funded from. Null = fund from wallet balance. */
     private Long envelopeId;
 
     @NotBlank(message = "Transaction PIN is required")

@@ -306,6 +306,28 @@ public class WalletController {
         return ResponseEntity.ok(Map.of("status", true, "data", data));
     }
 
+    @PostMapping("/transfer/p2p")
+    public ResponseEntity<?> walletP2pTransfer(
+            @Valid @RequestBody com.moniewise.moniewise_backend.dto.request.WalletP2PTransferRequest request,
+            Authentication authentication) {
+        try {
+            String email = authentication.getName();
+            walletService.transferFromWalletToUser(request, email);
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "message", "Transfer successful"
+            ));
+        } catch (IllegalArgumentException | javax.persistence.EntityNotFoundException e) {
+            return ResponseEntity.badRequest().body(Map.of("status", "error", "message", e.getMessage()));
+        } catch (com.moniewise.moniewise_backend.exception.InsufficientFundsException e) {
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(Map.of("status", "error", "message", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "error", "message", "Transfer failed. Please try again."));
+        }
+    }
+
     @PostMapping("/withdraw")
     public ResponseEntity<?> withdrawFunds(@Valid @RequestBody WithdrawalRequest request,
                                            Principal principal,

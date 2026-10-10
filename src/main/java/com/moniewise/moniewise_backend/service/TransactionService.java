@@ -62,6 +62,7 @@ public class TransactionService {
             SAVINGS_WITHDRAWAL,
             SAVINGS_DEPOSIT,
             USER_TO_USER,
+            WALLET_TO_USER,
             BUDGET_TOP_UP,
             BUDGET_CREATION_FEE_REFUND
     );
@@ -79,7 +80,8 @@ public class TransactionService {
             WALLET_ENVELOPE_TRANSFER_FEE,
             WALLET_TO_BUDGET,
             VAS_PURCHASE,
-            BUDGET_TOP_UP
+            BUDGET_TOP_UP,
+            WALLET_TO_USER
     );
 
     private static final Set<TransactionStatus> BALANCE_AFFECTING_STATUSES = EnumSet.of(
@@ -333,6 +335,7 @@ public class TransactionService {
 
         switch (transaction.getTransactionType()) {
             case ENVELOPE_TO_USER:
+            case WALLET_TO_USER:
                 title = "Transfer to " + getCounterpartyName(transaction);
                 subtitle = "P2P Transfer";
                 iconType = "USER";
@@ -566,6 +569,10 @@ public class TransactionService {
                 sender = sourceName;
                 recipient = getCounterpartyName(transaction);
                 break;
+            case WALLET_TO_USER:
+                sender = "Main Wallet";
+                recipient = getCounterpartyName(transaction);
+                break;
             case USER_TO_ENVELOPE:
                 sender = getCounterpartyName(transaction);
                 recipient = targetName;
@@ -580,7 +587,7 @@ public class TransactionService {
             case WALLET_DEPOSIT -> "Wallet funded";
             case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
             case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
-            case ENVELOPE_TO_USER -> "Sent to " + getCounterpartyName(transaction);
+            case ENVELOPE_TO_USER, WALLET_TO_USER -> "Sent to " + getCounterpartyName(transaction);
             case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(transaction);
             case BUDGET_CREATION_FEE -> "Budget creation fee";
             case BUDGET_CREATION_FEE_REFUND -> "Creation fee refunded";

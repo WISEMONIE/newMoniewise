@@ -320,16 +320,25 @@ public class PayeelordVasService {
                                                  String mobileNumber,
                                                  PayeelordDataPlan dataPlan,
                                                  PayeelordPricingService.VasPricing pricing) {
-        Wallet wallet = walletRepository.findByUserId(userId)
-                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
-
         BigDecimal sellingAmount = pricing.sellingAmount();
 
-        // Fund the purchase from the chosen budget envelope: validate ownership +
-        // period limit + vault + envelope rules, then HOLD the selling amount.
-        // (The real money is collected from the user's Rubies wallet only AFTER a
-        // successful Payeelord delivery — see finalize*Result.)
-        envelopeService.holdEnvelopeForVas(envelopeId, email, sellingAmount);
+        Wallet wallet;
+        if (envelopeId != null) {
+            wallet = walletRepository.findByUserId(userId)
+                    .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+            envelopeService.holdEnvelopeForVas(envelopeId, email, sellingAmount);
+        } else {
+            wallet = walletRepository.findByUserIdForUpdate(userId)
+                    .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+            if (wallet.getBalance().compareTo(sellingAmount) < 0) {
+                throw new com.moniewise.moniewise_backend.exception.InsufficientFundsException(
+                        String.format("Insufficient wallet balance. You need ₦%,.2f but only have ₦%,.2f available.",
+                                sellingAmount, wallet.getBalance()));
+            }
+            wallet.setBalance(wallet.getBalance().subtract(sellingAmount));
+            walletRepository.save(wallet);
+            monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        }
 
         PayeelordVasTransaction txn = new PayeelordVasTransaction();
         txn.setUserId(userId);
@@ -371,9 +380,9 @@ public class PayeelordVasService {
         if (response.isSuccessful()) {
             txn.setStatus(VasTransactionStatus.SUCCESSFUL);
             transactionRepository.save(txn);
-            // Spend confirmed: reduce the envelope vault + budget, then collect the
-            // money from the user's Rubies wallet into Moniewise's Rubies account.
-            envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
+            if (txn.getEnvelopeId() != null) {
+                envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
+            }
             collectRubiesPayment(txn);
             logVasMarkupRevenue(txn);
             upsertLedgerEntry(txn, describeVasPurchase(txn), TransactionStatus.COMPLETED);
@@ -383,33 +392,36 @@ public class PayeelordVasService {
                             "₦%,.2f airtime sent to %s on %s. Reference: %s",
                             txn.getFaceAmount(), txn.getMobileNumber(), txn.getNetwork(), txn.getReference()),
                     NotificationType.AIRTIME_PURCHASE_SUCCESS);
-            // Activation journey off-switch: comment out this one invocation to
-            // stop the first direct-spend completion push/email.
             activationJourneyNudgeService.nudgeAfterFirstDirectSpend(txn.getUserId(), null, txn.getEnvelopeId());
             return txn;
         }
 
         if (response.isProcessing()) {
-            transactionRepository.save(txn); // remains PENDING — Payeelord said so explicitly
+            transactionRepository.save(txn);
             upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Provider is still processing", TransactionStatus.PROCESSING);
             logger.info("[PayeelordVAS] Airtime purchase PROCESSING (left PENDING): ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             return txn;
         }
 
-        // Definitive failure — release the envelope hold (refund the budget).
-        envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
+        // Definitive failure — refund the source.
+        if (txn.getEnvelopeId() != null) {
+            envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
+        } else {
+            walletService.fundWallet(txn.getUserId(), txn.getSellingAmount(), null, true);
+        }
         txn.setStatus(VasTransactionStatus.REVERSED);
         txn.setFailureReason(response.getMessage() != null ? response.getMessage() : "Airtime purchase failed.");
         transactionRepository.save(txn);
         upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Reversed: " + txn.getFailureReason(), TransactionStatus.REVERSED);
-        logger.warn("[PayeelordVAS] Airtime purchase FAILED → envelope hold released: ref={} reason={}",
+        logger.warn("[PayeelordVAS] Airtime purchase FAILED → reversed: ref={} reason={}",
                 txn.getReference(), txn.getFailureReason());
+        String refundDest = txn.getEnvelopeId() != null ? "your envelope" : "your wallet";
         notifyAsync(txn.getUserId(), String.format(
                         "Your airtime purchase of ₦%,.2f to %s could not be completed (%s). " +
-                        "₦%,.2f has been refunded to your envelope. Reference: %s",
+                        "₦%,.2f has been refunded to %s. Reference: %s",
                         txn.getFaceAmount(), txn.getMobileNumber(), txn.getFailureReason(),
-                        txn.getSellingAmount(), txn.getReference()),
+                        txn.getSellingAmount(), refundDest, txn.getReference()),
                 NotificationType.AIRTIME_PURCHASE_FAILED);
         return txn;
     }
@@ -431,9 +443,9 @@ public class PayeelordVasService {
         if (response.isSuccessful()) {
             txn.setStatus(VasTransactionStatus.SUCCESSFUL);
             transactionRepository.save(txn);
-            // Spend confirmed: reduce the envelope vault + budget, then collect the
-            // money from the user's Rubies wallet into Moniewise's Rubies account.
-            envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
+            if (txn.getEnvelopeId() != null) {
+                envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
+            }
             collectRubiesPayment(txn);
             logVasMarkupRevenue(txn);
             upsertLedgerEntry(txn, describeVasPurchase(txn, planLabel), TransactionStatus.COMPLETED);
@@ -443,8 +455,6 @@ public class PayeelordVasService {
                             "₦%,.2f data (%s) sent to %s on %s. Reference: %s",
                             txn.getSellingAmount(), planLabel, txn.getMobileNumber(), txn.getNetwork(), txn.getReference()),
                     NotificationType.DATA_PURCHASE_SUCCESS);
-            // Activation journey off-switch: comment out this one invocation to
-            // stop the first direct-spend completion push/email.
             activationJourneyNudgeService.nudgeAfterFirstDirectSpend(txn.getUserId(), null, txn.getEnvelopeId());
             return txn;
         }
@@ -457,18 +467,24 @@ public class PayeelordVasService {
             return txn;
         }
 
-        envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
+        // Definitive failure — refund the source.
+        if (txn.getEnvelopeId() != null) {
+            envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
+        } else {
+            walletService.fundWallet(txn.getUserId(), txn.getSellingAmount(), null, true);
+        }
         txn.setStatus(VasTransactionStatus.REVERSED);
         txn.setFailureReason(response.getMessage() != null ? response.getMessage() : "Data purchase failed.");
         transactionRepository.save(txn);
         upsertLedgerEntry(txn, describeVasPurchase(txn, planLabel) + " | Reversed: " + txn.getFailureReason(), TransactionStatus.REVERSED);
-        logger.warn("[PayeelordVAS] Data purchase FAILED → envelope hold released: ref={} reason={}",
+        logger.warn("[PayeelordVAS] Data purchase FAILED → reversed: ref={} reason={}",
                 txn.getReference(), txn.getFailureReason());
+        String dataRefundDest = txn.getEnvelopeId() != null ? "your envelope" : "your wallet";
         notifyAsync(txn.getUserId(), String.format(
                         "Your purchase of %s for %s could not be completed (%s). " +
-                        "₦%,.2f has been refunded to your envelope. Reference: %s",
+                        "₦%,.2f has been refunded to %s. Reference: %s",
                         planLabel, txn.getMobileNumber(), txn.getFailureReason(),
-                        txn.getSellingAmount(), txn.getReference()),
+                        txn.getSellingAmount(), dataRefundDest, txn.getReference()),
                 NotificationType.DATA_PURCHASE_FAILED);
         return txn;
     }
@@ -607,24 +623,29 @@ public class PayeelordVasService {
         }
 
         // Safe to reverse — Payeelord never registered this purchase.
-        envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
+        if (txn.getEnvelopeId() != null) {
+            envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
+        } else {
+            walletService.fundWallet(txn.getUserId(), txn.getSellingAmount(), null, true);
+        }
         txn.setStatus(VasTransactionStatus.REVERSED);
         txn.setFailureReason("Auto-reversed by recovery sweeper — provider never confirmed the purchase " +
-                "within the recovery window; envelope hold released.");
+                "within the recovery window; funds returned.");
         txn.setUpdatedAt(LocalDateTime.now());
         transactionRepository.save(txn);
         upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Reversed by recovery", TransactionStatus.REVERSED);
 
-        logger.warn("[PayeelordVAS][RECOVERY] Auto-reversed stale PENDING purchase → envelope refunded: " +
+        logger.warn("[PayeelordVAS][RECOVERY] Auto-reversed stale PENDING purchase → refunded: " +
                         "ref={} userId={} sellingAmount={}",
                 txn.getReference(), txn.getUserId(), txn.getSellingAmount());
 
         boolean isAirtime = txn.getType() == VasTransactionType.AIRTIME;
+        String recoveryRefundDest = txn.getEnvelopeId() != null ? "your envelope" : "your wallet";
         notifyAsync(txn.getUserId(), String.format(
                         "We couldn't confirm your %s purchase of ₦%,.2f to %s, so ₦%,.2f has been refunded " +
-                        "to your envelope. Reference: %s",
+                        "to %s. Reference: %s",
                         isAirtime ? "airtime" : "data", txn.getFaceAmount(), txn.getMobileNumber(),
-                        txn.getSellingAmount(), txn.getReference()),
+                        txn.getSellingAmount(), recoveryRefundDest, txn.getReference()),
                 isAirtime ? NotificationType.AIRTIME_PURCHASE_FAILED
                           : NotificationType.DATA_PURCHASE_FAILED);
     }
