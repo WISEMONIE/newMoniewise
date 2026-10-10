@@ -23,7 +23,7 @@ public class TncController {
 
     @GetMapping
     public ResponseEntity<?> getTnc() {
-        String terms = "Moniewise helps you budget with discipline. Charges: ₦100 per 30 days, ₦15 processing fee on withdrawals, 5% on Emergency withdrawals, 2% on transfers (Safe Lock transfers free). Withdrawal fees are shown before confirmation and deducted with the withdrawal amount while the recipient receives the amount you selected. We protect your data and don't share bank details.";
+        String terms = "Moniewise helps you budget with discipline. Charges: ₦200 per 30 days, ₦15 processing fee on withdrawals, 5% on Emergency withdrawals, 2% on transfers (Safe Lock transfers free). Withdrawal fees are shown before confirmation and deducted with the withdrawal amount while the recipient receives the amount you selected. We protect your data and don't share bank details.";
         TncResponse tnc = new TncResponse(terms, "1.0");
         return ResponseEntity.ok(tnc);
     }

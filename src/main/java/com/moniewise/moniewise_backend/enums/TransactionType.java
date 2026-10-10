@@ -85,6 +85,13 @@ public enum TransactionType {
      * Platform-internal — must NOT appear in user-facing transaction history.
      * Reference pattern: KYC-BVN-{userId}-{timestamp}
      */
-    KYC_BVN_FEE
+    KYC_BVN_FEE,
+
+    /**
+     * Refund of the budget creation fee when a scheduled budget is cancelled
+     * before activation. User-visible — shows in Activity.
+     * Reference pattern: BUD-FEE-REFUND-{budgetId}-{timestamp}
+     */
+    BUDGET_CREATION_FEE_REFUND
 
     }

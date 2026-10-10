@@ -2114,6 +2114,109 @@ public class WalletService {
         });
     }
 
+    /**
+     * Physically returns a budget creation fee from Moniewise's Rubies revenue wallet
+     * back to the user's Rubies wallet. This is the reverse of
+     * {@link #collectRubiesBudgetCreationFeeAsync}.
+     */
+    public void returnRubiesBudgetCreationFeeAsync(
+            BigDecimal feeAmount,
+            String toWalletRef,
+            String toWalletName,
+            String refundRef,
+            Long userId) {
+
+        if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) return;
+        if (toWalletRef == null || toWalletRef.isBlank()) return;
+
+        // Resolve revenue account (source of the refund)
+        String revenueAccountNumber = null;
+        String revenueAccountName = "Moniewise Revenue";
+        try {
+            Wallet revenueWallet = walletRepository.findByRevenueWalletTrue().orElse(null);
+            if (revenueWallet != null
+                    && revenueWallet.getProviderWalletRef() != null
+                    && !revenueWallet.getProviderWalletRef().isBlank()) {
+                revenueAccountNumber = revenueWallet.getProviderWalletRef();
+            }
+            String cfgNumber = systemConfigService.getString(SystemConfigService.RUBIES_REVENUE_ACCOUNT_NUMBER);
+            String cfgName = systemConfigService.getString(SystemConfigService.RUBIES_REVENUE_ACCOUNT_NAME);
+            if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
+                revenueAccountNumber = cfgNumber;
+            }
+            if (cfgName != null && !cfgName.isBlank()) {
+                revenueAccountName = cfgName;
+            }
+        } catch (Exception e) {
+            logger.warn("[Rubies-FeeRefund] Could not resolve revenue account: {}", e.getMessage());
+        }
+
+        if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
+            logger.error("[Rubies-FeeRefund] Revenue account NOT CONFIGURED — ₦{} refund for ref={} NOT transferred",
+                    feeAmount, refundRef);
+            return;
+        }
+
+        final String revRef = "REFUND-" + refundRef;
+        final String fromAccount = revenueAccountNumber;
+        final String fromName = revenueAccountName;
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                TransactionLog existing = transactionLogRepository.findByReference(revRef).orElse(null);
+                if (existing != null && existing.getStatus() == TransactionStatus.COMPLETED) {
+                    logger.info("[Rubies-FeeRefund] Refund already completed for ref={} — skipping", revRef);
+                    return;
+                }
+
+                TransactionLog refundLog = transactionLogRepository.save(TransactionLog.builder()
+                        .userId(userId)
+                        .reference(revRef)
+                        .amount(feeAmount)
+                        .transactionType(TransactionType.BUDGET_CREATION_FEE_REFUND)
+                        .status(TransactionStatus.PENDING)
+                        .externalAccountNumber(toWalletRef)
+                        .externalAccountName(toWalletName)
+                        .externalBankName("Rubies MFB")
+                        .providerName(RubiesGateway.PROVIDER_NAME)
+                        .description("Budget creation fee refund ₦" + feeAmount + " via Rubies P2P for " + refundRef)
+                        .createdAt(LocalDateTime.now())
+                        .build());
+
+                PaymentGateway rubies = paymentGatewayResolver
+                        .resolveByProviderName(RubiesGateway.PROVIDER_NAME);
+                rubies.initiateTransferWithContext(
+                        fromAccount,
+                        fromName,
+                        "090175",
+                        "Rubies MFB",
+                        toWalletRef,
+                        toWalletName,
+                        feeAmount,
+                        revRef,
+                        "Budget creation fee refund for " + refundRef
+                );
+
+                transactionLogRepository.findByReference(revRef).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.COMPLETED);
+                    transactionLogRepository.save(log);
+                });
+
+                logger.info("[Rubies-FeeRefund] ₦{} returned from revenue to user {} wallet. ref={}",
+                        feeAmount, userId, revRef);
+
+            } catch (Exception e) {
+                transactionLogRepository.findByReference(revRef).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.FAILED);
+                    log.setDescription(log.getDescription() + " | FAILED: " + e.getMessage());
+                    transactionLogRepository.save(log);
+                });
+                logger.error("[Rubies-FeeRefund] Failed to return ₦{} to user {} for ref={}: {}",
+                        feeAmount, userId, revRef, e.getMessage());
+            }
+        });
+    }
+
     @Transactional
     public Wallet attachProviderMapping(
             Long userId,

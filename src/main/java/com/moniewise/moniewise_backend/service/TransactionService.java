@@ -62,7 +62,8 @@ public class TransactionService {
             SAVINGS_WITHDRAWAL,
             SAVINGS_DEPOSIT,
             USER_TO_USER,
-            BUDGET_TOP_UP
+            BUDGET_TOP_UP,
+            BUDGET_CREATION_FEE_REFUND
     );
 
     private static final Set<TransactionType> USER_VISIBLE_OUTGOING_TYPES = EnumSet.of(
@@ -539,6 +540,10 @@ public class TransactionService {
                 sender = "Unallocated Funds";
                 recipient = "Main Wallet";
                 break;
+            case BUDGET_CREATION_FEE_REFUND:
+                sender = "Wisemonie Fee";
+                recipient = "Main Wallet";
+                break;
             case WALLET_DEPOSIT:
                 sender = "External Transfer / Card";
                 recipient = "Main Wallet";
@@ -578,6 +583,7 @@ public class TransactionService {
             case ENVELOPE_TO_USER -> "Sent to " + getCounterpartyName(transaction);
             case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(transaction);
             case BUDGET_CREATION_FEE -> "Budget creation fee";
+            case BUDGET_CREATION_FEE_REFUND -> "Creation fee refunded";
             case WALLET_WITHDRAWAL_FEE -> "Withdrawal fee";
             case WALLET_ENVELOPE_TRANSFER_FEE -> "Transfer fee";
             case BUDGET_ALLOCATION -> "Allocated to budget";
