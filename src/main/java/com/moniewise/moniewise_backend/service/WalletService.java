@@ -32,6 +32,8 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
@@ -2115,106 +2117,60 @@ public class WalletService {
     }
 
     /**
-     * Physically returns a budget creation fee from Moniewise's Rubies revenue wallet
-     * back to the user's Rubies wallet. This is the reverse of
-     * {@link #collectRubiesBudgetCreationFeeAsync}.
+     * Called when a scheduled budget transitions to ACTIVE: credits the revenue
+     * wallet, writes a revenue log, and triggers Rubies P2P fee collection.
      */
-    public void returnRubiesBudgetCreationFeeAsync(
-            BigDecimal feeAmount,
-            String toWalletRef,
-            String toWalletName,
-            String refundRef,
-            Long userId) {
+    public void creditRevenueForScheduledBudgetActivation(Long userId, Long budgetId,
+                                                          BigDecimal fee, long durationDays) {
+        if (fee == null || fee.compareTo(BigDecimal.ZERO) <= 0) return;
 
-        if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) return;
-        if (toWalletRef == null || toWalletRef.isBlank()) return;
-
-        // Resolve revenue account (source of the refund)
-        String revenueAccountNumber = null;
-        String revenueAccountName = "Moniewise Revenue";
-        try {
-            Wallet revenueWallet = walletRepository.findByRevenueWalletTrue().orElse(null);
-            if (revenueWallet != null
-                    && revenueWallet.getProviderWalletRef() != null
-                    && !revenueWallet.getProviderWalletRef().isBlank()) {
-                revenueAccountNumber = revenueWallet.getProviderWalletRef();
-            }
-            String cfgNumber = systemConfigService.getString(SystemConfigService.RUBIES_REVENUE_ACCOUNT_NUMBER);
-            String cfgName = systemConfigService.getString(SystemConfigService.RUBIES_REVENUE_ACCOUNT_NAME);
-            if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
-                revenueAccountNumber = cfgNumber;
-            }
-            if (cfgName != null && !cfgName.isBlank()) {
-                revenueAccountName = cfgName;
-            }
-        } catch (Exception e) {
-            logger.warn("[Rubies-FeeRefund] Could not resolve revenue account: {}", e.getMessage());
-        }
-
-        if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
-            logger.error("[Rubies-FeeRefund] Revenue account NOT CONFIGURED — ₦{} refund for ref={} NOT transferred",
-                    feeAmount, refundRef);
+        Wallet revenueWallet = walletRepository.findByRevenueWalletTrue()
+                .orElse(null);
+        if (revenueWallet == null) {
+            logger.error("[Budget] Revenue wallet not found — cannot credit fee for activated budget {}", budgetId);
             return;
         }
 
-        final String revRef = "REFUND-" + refundRef;
-        final String fromAccount = revenueAccountNumber;
-        final String fromName = revenueAccountName;
+        revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
+        walletRepository.save(revenueWallet);
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                TransactionLog existing = transactionLogRepository.findByReference(revRef).orElse(null);
-                if (existing != null && existing.getStatus() == TransactionStatus.COMPLETED) {
-                    logger.info("[Rubies-FeeRefund] Refund already completed for ref={} — skipping", revRef);
-                    return;
-                }
+        RevenueLog revenueLog = new RevenueLog();
+        revenueLog.setUserId(revenueWallet.getUser().getId());
+        revenueLog.setType("budget_creation_fee");
+        revenueLog.setAmount(fee);
+        revenueLog.setDescription("Budget fee for " + durationDays + " days (collected on activation)");
+        revenueLog.setCreatedAt(LocalDateTime.now());
+        revenueLogRepository.save(revenueLog);
 
-                TransactionLog refundLog = transactionLogRepository.save(TransactionLog.builder()
-                        .userId(userId)
-                        .reference(revRef)
-                        .amount(feeAmount)
-                        .transactionType(TransactionType.BUDGET_CREATION_FEE_REFUND)
-                        .status(TransactionStatus.PENDING)
-                        .externalAccountNumber(toWalletRef)
-                        .externalAccountName(toWalletName)
-                        .externalBankName("Rubies MFB")
-                        .providerName(RubiesGateway.PROVIDER_NAME)
-                        .description("Budget creation fee refund ₦" + feeAmount + " via Rubies P2P for " + refundRef)
-                        .createdAt(LocalDateTime.now())
-                        .build());
+        String feeReference = "BUD-FEE-" + budgetId + "-ACT-" + System.currentTimeMillis();
+        scheduleRubiesFeeCollectionAfterCommit(userId, fee, feeReference);
 
-                PaymentGateway rubies = paymentGatewayResolver
-                        .resolveByProviderName(RubiesGateway.PROVIDER_NAME);
-                rubies.initiateTransferWithContext(
-                        fromAccount,
-                        fromName,
-                        "090175",
-                        "Rubies MFB",
-                        toWalletRef,
-                        toWalletName,
-                        feeAmount,
-                        revRef,
-                        "Budget creation fee refund for " + refundRef
-                );
+        logger.info("[Budget] Revenue credited ₦{} for activated scheduled budget {} (user {})",
+                fee, budgetId, userId);
+    }
 
-                transactionLogRepository.findByReference(revRef).ifPresent(log -> {
-                    log.setStatus(TransactionStatus.COMPLETED);
-                    transactionLogRepository.save(log);
-                });
+    private void scheduleRubiesFeeCollectionAfterCommit(Long userId, BigDecimal fee, String feeReference) {
+        Wallet userWallet = walletRepository.findByUserId(userId).orElse(null);
+        if (userWallet == null
+                || !RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(userWallet.getProviderName())
+                || userWallet.getProviderWalletRef() == null
+                || userWallet.getProviderWalletRef().isBlank()) {
+            return;
+        }
 
-                logger.info("[Rubies-FeeRefund] ₦{} returned from revenue to user {} wallet. ref={}",
-                        feeAmount, userId, revRef);
+        String fromWalletRef = userWallet.getProviderWalletRef();
+        String debitName = resolveDisplayNameByUserId(userId);
+        Runnable collect = () -> collectRubiesBudgetCreationFeeAsync(
+                fee, fromWalletRef, debitName, feeReference, userId);
 
-            } catch (Exception e) {
-                transactionLogRepository.findByReference(revRef).ifPresent(log -> {
-                    log.setStatus(TransactionStatus.FAILED);
-                    log.setDescription(log.getDescription() + " | FAILED: " + e.getMessage());
-                    transactionLogRepository.save(log);
-                });
-                logger.error("[Rubies-FeeRefund] Failed to return ₦{} to user {} for ref={}: {}",
-                        feeAmount, userId, revRef, e.getMessage());
-            }
-        });
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override public void afterCommit() { collect.run(); }
+                    });
+        } else {
+            collect.run();
+        }
     }
 
     @Transactional

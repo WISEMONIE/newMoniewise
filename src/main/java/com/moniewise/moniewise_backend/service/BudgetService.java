@@ -974,9 +974,12 @@ public class BudgetService {
         // === DEDUCT ALLOCATION FROM WALLET ===
         walletService.deductBalance(user.getId(), allocationSum);
 
-        // === CREDIT REVENUE WALLET (only when fee > 0) ===
+        boolean isScheduled = savedBudget.getStatus() == BudgetStatus.SCHEDULED;
+
+        // === CREDIT REVENUE WALLET (only for ACTIVE budgets — scheduled budgets
+        //     hold the fee until activation so cancellation is a simple refund) ===
         Wallet revenueWallet = null;
-        if (fee.compareTo(BigDecimal.ZERO) > 0) {
+        if (fee.compareTo(BigDecimal.ZERO) > 0 && !isScheduled) {
             revenueWallet = walletRepository.findByRevenueWalletTrue()
                     .orElseThrow(() -> new RuntimeException("Revenue wallet not found"));
             revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
@@ -992,7 +995,7 @@ public class BudgetService {
         allocationLog.setFee(fee);
         allocationLog.setTransactionType(BUDGET_ALLOCATION);
         allocationLog.setReference("BUD-ALL-" + savedBudget.getId() + "-" + System.currentTimeMillis());
-        allocationLog.setDescription(savedBudget.getStatus() == BudgetStatus.SCHEDULED
+        allocationLog.setDescription(isScheduled
                 ? "Reserved for scheduled budget envelopes"
                 : "Allocated to budget envelopes");
         allocationLog.setStatus(TransactionStatus.COMPLETED);
@@ -1009,23 +1012,27 @@ public class BudgetService {
             feeLog.setTransactionType(BUDGET_CREATION_FEE);
             String feeReference = "BUD-FEE-" + savedBudget.getId() + "-" + System.currentTimeMillis();
             feeLog.setReference(feeReference);
-            feeLog.setDescription("Budget creation fee");
+            feeLog.setDescription(isScheduled
+                    ? "Budget creation fee (held until activation)"
+                    : "Budget creation fee");
             feeLog.setStatus(TransactionStatus.COMPLETED);
             feeLog.setCreatedAt(now);
             transactionLogRepository.save(feeLog);
 
-            // === REVENUE LOG ===
-            if (revenueWallet != null) {
-                RevenueLog revenueLog = new RevenueLog();
-                revenueLog.setUserId(revenueWallet.getUser().getId());
-                revenueLog.setType("budget_creation_fee");
-                revenueLog.setAmount(fee);
-                revenueLog.setDescription("Budget fee for " + durationDays + " days");
-                revenueLog.setCreatedAt(now);
-                revenueLogRepository.save(revenueLog);
-            }
+            // Revenue log + Rubies P2P only for ACTIVE budgets
+            if (!isScheduled) {
+                if (revenueWallet != null) {
+                    RevenueLog revenueLog = new RevenueLog();
+                    revenueLog.setUserId(revenueWallet.getUser().getId());
+                    revenueLog.setType("budget_creation_fee");
+                    revenueLog.setAmount(fee);
+                    revenueLog.setDescription("Budget fee for " + durationDays + " days");
+                    revenueLog.setCreatedAt(now);
+                    revenueLogRepository.save(revenueLog);
+                }
 
-            collectRubiesBudgetCreationFeeAfterCommit(user.getId(), fee, feeReference);
+                collectRubiesBudgetCreationFeeAfterCommit(user.getId(), fee, feeReference);
+            }
         }
 
         // === FEE RESERVE (pre-fund transfer fees from wallet surplus) ===
@@ -1182,6 +1189,9 @@ public class BudgetService {
         // soft-cancel. DRAFT was never debited; COMPLETED was already refunded.
         if (isFundedBudgetStatus(budget.getStatus())) {
             budgetLifeCycleManager.refundUnusedBudgetBalance(budget, user);
+            if (budget.getStatus() == BudgetStatus.SCHEDULED) {
+                refundCreationFee(budget, user);
+            }
         }
         // Soft-delete rather than hard-delete: keep the budget, its envelopes, and
         // the transaction history for audit / regulatory retention. Seven audit
@@ -1818,102 +1828,34 @@ public class BudgetService {
             return BigDecimal.ZERO;
         }
 
-        LocalDateTime now = LocalDateTime.now();
-
-        // Credit the fee back to the user's internal wallet
+        // The fee was held in the user's wallet (never credited to revenue or
+        // moved on Rubies for scheduled budgets), so a simple wallet credit
+        // restores it — no revenue reversal or Rubies P2P needed.
         walletService.fundWallet(
                 user.getId(),
                 fee,
-                String.format("Creation fee refund for cancelled scheduled budget: %s", budget.getName()),
+                String.format("Creation fee returned — scheduled budget '%s' cancelled", budget.getName()),
                 false
         );
 
-        // Debit the revenue wallet (internal ledger)
-        Wallet revenueWallet = walletRepository.findByRevenueWalletTrue().orElse(null);
-        if (revenueWallet != null) {
-            if (revenueWallet.getBalance().compareTo(fee) >= 0) {
-                revenueWallet.setBalance(revenueWallet.getBalance().subtract(fee));
-                walletRepository.save(revenueWallet);
-            } else {
-                logger.warn("[Budget] Revenue wallet balance ₦{} < refund ₦{} — deducting anyway to keep ledger accurate",
-                        revenueWallet.getBalance(), fee);
-                revenueWallet.setBalance(revenueWallet.getBalance().subtract(fee));
-                walletRepository.save(revenueWallet);
-            }
-        } else {
-            logger.error("[Budget] Revenue wallet not found — cannot debit for creation fee refund on budget {}",
-                    budget.getId());
-        }
-
-        // Log the refund transaction
-        String refundRef = "BUD-FEE-REFUND-" + budget.getId() + "-" + System.currentTimeMillis();
         TransactionLog refundLog = new TransactionLog();
         refundLog.setUserId(user.getId());
         refundLog.setBudgetId(budget.getId());
         refundLog.setAmount(fee);
         refundLog.setFee(BigDecimal.ZERO);
         refundLog.setTransactionType(BUDGET_CREATION_FEE_REFUND);
-        refundLog.setReference(refundRef);
-        refundLog.setDescription("Budget creation fee refunded — scheduled budget cancelled before activation");
+        refundLog.setReference("BUD-FEE-REFUND-" + budget.getId() + "-" + System.currentTimeMillis());
+        refundLog.setDescription("Budget creation fee returned — scheduled budget cancelled before activation");
         refundLog.setStatus(TransactionStatus.COMPLETED);
-        refundLog.setCreatedAt(now);
+        refundLog.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(refundLog);
 
-        // Clear the fee on the budget entity
         budget.setFeeAmount(BigDecimal.ZERO);
 
-        // Schedule reverse Rubies P2P (revenue → user) after transaction commits
-        returnRubiesCreationFeeAfterCommit(user.getId(), fee, refundRef);
-
-        logger.info("[Budget] Creation fee ₦{} refunded to user {} for cancelled scheduled budget {}",
+        logger.info("[Budget] Creation fee ₦{} returned to user {} for cancelled scheduled budget {}",
                 fee, user.getId(), budget.getId());
 
         return fee;
-    }
-
-    private void returnRubiesCreationFeeAfterCommit(Long userId, BigDecimal feeAmount, String refundRef) {
-        if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) return;
-
-        Wallet userWallet = walletRepository.findByUserId(userId).orElse(null);
-        if (userWallet == null) {
-            logger.warn("[Budget] Cannot return creation fee physically: wallet not found for user {}", userId);
-            return;
-        }
-        if (!RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(userWallet.getProviderName())) {
-            return;
-        }
-        if (userWallet.getProviderWalletRef() == null || userWallet.getProviderWalletRef().isBlank()) {
-            logger.warn("[Budget] Cannot return creation fee physically: Rubies wallet ref missing for user {}", userId);
-            return;
-        }
-
-        String toWalletRef = userWallet.getProviderWalletRef();
-        String creditName = walletService.resolveDisplayNameByUserId(userId);
-        Runnable returnFee = () -> {
-            try {
-                walletService.returnRubiesBudgetCreationFeeAsync(
-                        feeAmount,
-                        toWalletRef,
-                        creditName,
-                        refundRef,
-                        userId
-                );
-            } catch (Exception e) {
-                logger.error("[Budget] Failed to enqueue Rubies creation fee return for ref={}: {}",
-                        refundRef, e.getMessage());
-            }
-        };
-
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    returnFee.run();
-                }
-            });
-        } else {
-            returnFee.run();
-        }
     }
 
     private void collectRubiesBudgetCreationFeeAfterCommit(Long userId, BigDecimal feeAmount, String feeReference) {

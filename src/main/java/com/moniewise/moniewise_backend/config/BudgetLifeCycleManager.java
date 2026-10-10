@@ -286,6 +286,16 @@ public class BudgetLifeCycleManager {
 
         budget.setStatus(BudgetStatus.ACTIVE);
 
+        // Collect the held creation fee now that the budget is active
+        BigDecimal fee = budget.getFeeAmount();
+        if (fee != null && fee.compareTo(BigDecimal.ZERO) > 0) {
+            long durationDays = budget.getStartDate() != null && budget.getEndDate() != null
+                    ? java.time.temporal.ChronoUnit.DAYS.between(budget.getStartDate(), budget.getEndDate())
+                    : 30;
+            walletService.creditRevenueForScheduledBudgetActivation(
+                    budget.getUser().getId(), budget.getId(), fee, durationDays);
+        }
+
         if (isBudgetPastEndDate(budget, now)) {
             List<Budget> budgetsToUpdate = new ArrayList<>();
             List<Envelope> envelopesToUpdate = new ArrayList<>();
