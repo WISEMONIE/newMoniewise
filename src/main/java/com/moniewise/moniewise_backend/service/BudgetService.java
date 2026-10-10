@@ -1835,7 +1835,7 @@ public class BudgetService {
                 user.getId(),
                 fee,
                 String.format("Creation fee returned — scheduled budget '%s' cancelled", budget.getName()),
-                false
+                true
         );
 
         TransactionLog refundLog = new TransactionLog();
