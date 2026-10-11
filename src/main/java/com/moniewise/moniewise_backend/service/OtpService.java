@@ -79,6 +79,7 @@ public class OtpService {
         Optional<Otp> existing = otpRepository.findByUserId(userId);
         if (existing.isPresent() && existing.get().getExpiresAt().isAfter(LocalDateTime.now())) {
             String existingCode = existing.get().getOtpCode();
+            System.out.println("[OTP-GEN] Reusing existing OTP for userId=" + userId + " code=" + existingCode);
             try {
                 CompletableFuture.runAsync(() -> notificationService.sendOtpEmail(user.getEmail(), existingCode));
             } catch (Exception e) {
@@ -86,6 +87,7 @@ public class OtpService {
             }
             return existingCode;
         }
+        System.out.println("[OTP-GEN] Creating NEW OTP for userId=" + userId);
 
         SecureRandom random = new SecureRandom();
         String otpCode = String.valueOf(random.nextInt(900000) + 100000);
@@ -107,6 +109,15 @@ public class OtpService {
 
     @Transactional(readOnly = true)
     public boolean verifyOtp(Long userId, String otpCode) {
+        System.out.println("[OTP-VERIFY] userId=" + userId + " codeReceived='" + otpCode + "' len=" + (otpCode == null ? 0 : otpCode.length()));
+        Optional<Otp> existing = otpRepository.findByUserId(userId);
+        if (existing.isPresent()) {
+            Otp stored = existing.get();
+            System.out.println("[OTP-VERIFY] storedCode='" + stored.getOtpCode() + "' expires=" + stored.getExpiresAt() + " match=" + stored.getOtpCode().equals(otpCode));
+        } else {
+            System.out.println("[OTP-VERIFY] NO OTP found in DB for userId=" + userId);
+        }
+
         Optional<Otp> otpOptional = otpRepository.findByUserIdAndOtpCode(userId, otpCode);
 
         if (otpOptional.isEmpty()) {
