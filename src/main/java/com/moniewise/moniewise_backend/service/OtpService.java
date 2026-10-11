@@ -73,13 +73,24 @@ public class OtpService {
      */
     @Transactional
     public String generateLoginOtp(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
+
+        Optional<Otp> existing = otpRepository.findByUserId(userId);
+        if (existing.isPresent() && existing.get().getExpiresAt().isAfter(LocalDateTime.now())) {
+            String existingCode = existing.get().getOtpCode();
+            try {
+                CompletableFuture.runAsync(() -> notificationService.sendOtpEmail(user.getEmail(), existingCode));
+            } catch (Exception e) {
+                System.err.println("Failed to resend login OTP email: " + e.getMessage());
+            }
+            return existingCode;
+        }
+
         SecureRandom random = new SecureRandom();
         String otpCode = String.valueOf(random.nextInt(900000) + 100000);
 
         otpRepository.deleteByUserId(userId);
-
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
 
         LocalDateTime now = LocalDateTime.now();
         Otp otp = new Otp(userId, otpCode, now, now.plusMinutes(OTP_EXPIRY_MINUTES));
