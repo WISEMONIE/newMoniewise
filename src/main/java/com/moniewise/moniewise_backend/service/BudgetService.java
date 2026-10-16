@@ -1432,18 +1432,67 @@ public class BudgetService {
             throw new IllegalArgumentException("Only active budgets can be extended");
         }
 
+        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
+        if (budget.getStartDate() != null && budget.getEndDate() != null && newEndDate.isBefore(budget.getEndDate())) {
+            long newDuration = ChronoUnit.DAYS.between(budget.getStartDate(), newEndDate) + 1;
+            for (Envelope envelope : envelopes) {
+                Map<String, Object> envelopeConditions = envelope.getConditions();
+                if (envelopeConditions == null
+                        || !"interval".equalsIgnoreCase(String.valueOf(envelopeConditions.getOrDefault("type", "")))) {
+                    continue;
+                }
+                String problem = IntervalReleaseRules.rejection(
+                        (int) newDuration,
+                        IntervalReleaseRules.readIntervalDays(envelopeConditions)
+                );
+                if (problem != null) {
+                    String envelopeName = envelope.getName() != null ? envelope.getName() : "This envelope";
+                    throw new IllegalArgumentException("'" + envelopeName + "' uses Every few days. " + problem);
+                }
+            }
+        }
+
         // Step 2: Update Budget details
+        LocalDate previousEnd = budget.getEndDate();
         if (newName != null && !newName.trim().isEmpty()) {
             budget.setName(newName);
         }
         budget.setEndDate(newEndDate);
+        if (budget.getStartDate() != null) {
+            long duration = ChronoUnit.DAYS.between(budget.getStartDate(), newEndDate) + 1;
+            budget.setDurationDays((int) Math.max(duration, 1L));
+        }
         budget.setStatus(BudgetStatus.ACTIVE); // Ensure it remains active
         budgetRepository.save(budget);
 
         // Step 3: Roll over Envelopes (keep existing funds and conditions)
-        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
         System.out.println("Rolling over " + envelopes.size() + " envelopes for Budget ID: " + budgetId);
-        // No changes needed to envelopes since we're rolling over existing funds
+        boolean endDateChanged = previousEnd == null || !newEndDate.equals(previousEnd);
+        if (endDateChanged) {
+            for (Envelope envelope : envelopes) {
+                Map<String, Object> envelopeConditions = envelope.getConditions();
+                if (envelopeConditions == null
+                        || !"interval".equalsIgnoreCase(String.valueOf(envelopeConditions.getOrDefault("type", "")))) {
+                    continue;
+                }
+                envelopeService.triggerRecalculation(envelope);
+                Object rawLimit = envelope.getConditions().get("limit");
+                BigDecimal nextLimit = rawLimit instanceof BigDecimal decimal
+                        ? decimal
+                        : rawLimit instanceof Number number
+                            ? new BigDecimal(number.toString())
+                            : BigDecimal.ZERO;
+                BigDecimal pocket = envelope.getRemainingAmount() == null
+                        ? BigDecimal.ZERO
+                        : envelope.getRemainingAmount();
+                if (nextLimit.compareTo(BigDecimal.ZERO) > 0 && pocket.compareTo(nextLimit) > 0) {
+                    envelope.setRemainingAmount(nextLimit);
+                    envelopeRepository.save(envelope);
+                }
+                budgetLifeCycleManager.scheduleDynamicTasks(envelope);
+            }
+            evictEnvelopeCache(budgetId);
+        }
 
         // Step 4: Log transaction
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -1708,6 +1757,13 @@ public class BudgetService {
                 long active = countActiveDays(start, end, days);
                 yield active > 0 ? amount.divide(BigDecimal.valueOf(active), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
             }
+            case "interval" -> {
+                int intervalDays = IntervalReleaseRules.readIntervalDays(cond);
+                int releases = IntervalReleaseRules.releaseCount(start, end, intervalDays);
+                yield releases > 0
+                        ? amount.divide(BigDecimal.valueOf(releases), 2, RoundingMode.HALF_UP)
+                        : BigDecimal.ZERO;
+            }
             default -> BigDecimal.ZERO;
         };
     }
@@ -1737,6 +1793,12 @@ public class BudgetService {
                     );
                 }
                 yield countActiveDays(start, end, days);
+            }
+            case "interval" -> {
+                int durationDays = (int) (ChronoUnit.DAYS.between(start, end) + 1);
+                int intervalDays = IntervalReleaseRules.readIntervalDays(cond);
+                IntervalReleaseRules.validate(durationDays, intervalDays);
+                yield IntervalReleaseRules.releaseCount(start, end, intervalDays);
             }
             default -> 1;
         };

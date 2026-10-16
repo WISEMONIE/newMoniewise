@@ -91,7 +91,8 @@ public class AiBudgetService {
             List<AiEnvelopeSuggestion> currentItems = request.getEnvelopes() == null
                 ? Collections.emptyList()
                 : request.getEnvelopes();
-            List<AiEnvelopeSuggestion> normalizedCurrent = normalizeItems(currentItems, 100.0);
+            List<AiEnvelopeSuggestion> normalizedCurrent = normalizeItems(
+                currentItems, 100.0, request.getDurationDays());
             double allocatedPercentage = sumPercentages(normalizedCurrent);
             double remainingAmount = computeRemainingAmount(request.getTotalBudget(), allocatedPercentage);
 
@@ -225,7 +226,7 @@ public class AiBudgetService {
         if (response.getReasoning() == null || response.getReasoning().isBlank()) {
             response.setReasoning(buildHeuristicReasoning(request, false));
         }
-        response.setEnvelopes(normalizeItems(response.getEnvelopes(), 100.0));
+        response.setEnvelopes(normalizeItems(response.getEnvelopes(), 100.0, request.getDurationDays()));
     }
 
     private void normalizeAllocationResponse(AiBudgetAllocationResponse response, AiStarterEnvelopeRequest request) {
@@ -242,7 +243,8 @@ public class AiBudgetService {
         // already summed to 100% (e.g. a "write it out" of 4000 food + 2000
         // offering on a 6000 budget) down to 95%, leaving a permanent ~5% gap
         // the app surfaced as "Left: ₦300". normalizeToFullAllocation closes it.
-        List<AiEnvelopeSuggestion> normalized = normalizeToFullAllocation(response.getEnvelopes());
+        List<AiEnvelopeSuggestion> normalized = normalizeToFullAllocation(
+            response.getEnvelopes(), request.getDurationDays());
         response.setEnvelopes(normalized);
         response.setTotalAllocatedPercentage(sumPercentages(normalized));
     }
@@ -253,8 +255,11 @@ public class AiBudgetService {
      * for dedupe/clamp, then proportionally scales the remainder to 100 and
      * fixes rounding drift on the first item.
      */
-    private List<AiEnvelopeSuggestion> normalizeToFullAllocation(List<AiEnvelopeSuggestion> items) {
-        List<AiEnvelopeSuggestion> normalized = normalizeItems(items, 100.0);
+    private List<AiEnvelopeSuggestion> normalizeToFullAllocation(
+            List<AiEnvelopeSuggestion> items,
+            Integer durationDays
+    ) {
+        List<AiEnvelopeSuggestion> normalized = normalizeItems(items, 100.0, durationDays);
         if (normalized.isEmpty()) {
             return normalized;
         }
@@ -281,7 +286,7 @@ public class AiBudgetService {
         }
 
         List<AiEnvelopeSuggestion> normalized =
-            normalizeItems(response.getEnvelopes(), 100.0);
+            normalizeItems(response.getEnvelopes(), 100.0, request.getDurationDays());
         double total = sumPercentages(normalized);
         double remainingAmount = computeRemainingAmount(request.getTotalBudget(), total);
 
@@ -304,6 +309,14 @@ public class AiBudgetService {
     }
 
     private List<AiEnvelopeSuggestion> normalizeItems(List<AiEnvelopeSuggestion> items, double targetCap) {
+        return normalizeItems(items, targetCap, null);
+    }
+
+    private List<AiEnvelopeSuggestion> normalizeItems(
+            List<AiEnvelopeSuggestion> items,
+            double targetCap,
+            Integer durationDays
+    ) {
         if (items == null || items.isEmpty()) {
             return items;
         }
@@ -315,7 +328,7 @@ public class AiBudgetService {
                 continue;
             }
             String category = normalizeCategory(item.getCategory());
-            String conditionType = normalizeConditionType(item.getConditionType());
+            String conditionType = normalizeConditionType(item.getConditionType(), durationDays);
             String name = item.getName() == null ? "Envelope" : item.getName().trim();
             if (name.isBlank()) {
                 name = defaultNameForCategory(category);
@@ -387,8 +400,14 @@ public class AiBudgetService {
         return cleaned;
     }
 
-    private boolean isAllowedConditionType(String value) {
-        return value != null && switch (value) {
+    private boolean isAllowedConditionType(String value, Integer durationDays) {
+        if (value == null) {
+            return false;
+        }
+        if ("interval".equals(value)) {
+            return durationDays != null && durationDays >= IntervalReleaseRules.MINIMUM_BUDGET_DAYS;
+        }
+        return switch (value) {
             case "daily", "weekly", "dynamic", "emergency" -> true;
             default -> false;
         };
@@ -403,9 +422,12 @@ public class AiBudgetService {
         };
     }
 
-    private String normalizeConditionType(String value) {
-        if (isAllowedConditionType(value)) {
+    private String normalizeConditionType(String value, Integer durationDays) {
+        if (isAllowedConditionType(value, durationDays)) {
             return value;
+        }
+        if ("interval".equals(value)) {
+            return "daily";
         }
         return "weekly";
     }
@@ -425,7 +447,8 @@ public class AiBudgetService {
         List<AiEnvelopeSuggestion> currentItems = request.getEnvelopes() == null
             ? Collections.emptyList()
             : request.getEnvelopes();
-        List<AiEnvelopeSuggestion> normalizedCurrent = normalizeItems(currentItems, 100.0);
+        List<AiEnvelopeSuggestion> normalizedCurrent = normalizeItems(
+            currentItems, 100.0, request.getDurationDays());
 
         List<AiEnvelopeSuggestion> envelopes = buildAssistantFallbackSuggestions(
             request,
@@ -783,7 +806,7 @@ public class AiBudgetService {
         }
 
         // Normalize to 100%
-        results = normalizeItems(results, 100.0);
+        results = normalizeItems(results, 100.0, request.getDurationDays());
 
         // If total < 95%, add Savings for the remainder
         double total = sumPercentages(results);
@@ -930,7 +953,8 @@ public class AiBudgetService {
             }
 
             existing.setCategory(normalizeCategory(requested.getCategory()));
-            existing.setConditionType(normalizeConditionType(requested.getConditionType()));
+            existing.setConditionType(normalizeConditionType(
+                requested.getConditionType(), request.getDurationDays()));
             if (requested.getPercentage() != null && requested.getPercentage() > 0) {
                 existing.setPercentage(requested.getPercentage());
             }
@@ -944,10 +968,11 @@ public class AiBudgetService {
             rebalanceAssistantSuggestions(
                 mergedItems,
                 normalizedCurrent,
-                request.getTotalBudget() == null ? 100.0 : 100.0
+                request.getTotalBudget() == null ? 100.0 : 100.0,
+                request.getDurationDays()
             );
         } else {
-            mergedItems = normalizeItems(mergedItems, 100.0);
+            mergedItems = normalizeItems(mergedItems, 100.0, request.getDurationDays());
         }
 
         applyRenameEnvelopeIntent(latestMessage, request, mergedItems);
@@ -962,7 +987,8 @@ public class AiBudgetService {
     private void rebalanceAssistantSuggestions(
         List<AiEnvelopeSuggestion> mergedItems,
         List<AiEnvelopeSuggestion> normalizedCurrent,
-        double targetTotal
+        double targetTotal,
+        Integer durationDays
     ) {
         if (mergedItems.isEmpty()) {
             return;
@@ -986,7 +1012,7 @@ public class AiBudgetService {
             return;
         }
 
-        List<AiEnvelopeSuggestion> normalized = normalizeItems(mergedItems, targetTotal);
+        List<AiEnvelopeSuggestion> normalized = normalizeItems(mergedItems, targetTotal, durationDays);
         mergedItems.clear();
         mergedItems.addAll(normalized);
     }
@@ -1049,7 +1075,7 @@ public class AiBudgetService {
             running += item.getPercentage();
         }
 
-        return normalizeItems(suggestions, 100.0);
+        return normalizeItems(suggestions, 100.0, request.getDurationDays());
     }
 
     private List<AiEnvelopeSuggestion> extractFreeFormEnvelopeNames(
@@ -1499,7 +1525,8 @@ public class AiBudgetService {
             return;
         }
 
-        List<AiEnvelopeSuggestion> reduced = normalizeItems(mergedItems, targetAllocated);
+        List<AiEnvelopeSuggestion> reduced = normalizeItems(
+            mergedItems, targetAllocated, request.getDurationDays());
         mergedItems.clear();
         mergedItems.addAll(reduced);
     }

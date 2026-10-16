@@ -366,6 +366,13 @@ public class NotificationService {
                 case DISBURSEMENT_SUCCESS -> {
                     String amount = formatAmount(params.getOrDefault("amount", "0"));
                     String name = safeText(params.get("envelopeName"), "selected");
+                    if (params.containsKey("intervalDays")) {
+                        int intervalDays = IntervalReleaseRules.readIntervalDays(params.get("intervalDays"));
+                        boolean lastRelease = Boolean.TRUE.equals(params.get("intervalLast"))
+                                || "true".equalsIgnoreCase(String.valueOf(params.get("intervalLast")));
+                        String nextAmount = formatAmount(params.getOrDefault("nextAmount", amount));
+                        yield IntervalReleaseRules.successMessage(amount, name, lastRelease, nextAmount, intervalDays);
+                    }
                     yield "\u20A6" + amount + " has been unlocked in your '" + name + "' envelope. It's ready to spend!";
                 }
                 case DISBURSEMENT, DISBURSEMENT_READY -> {

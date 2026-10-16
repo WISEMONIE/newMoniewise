@@ -11,6 +11,7 @@ import com.moniewise.moniewise_backend.service.ActivationJourneyNudgeService;
 import com.moniewise.moniewise_backend.service.BadgeAwardService;
 import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
+import com.moniewise.moniewise_backend.service.IntervalReleaseRules;
 import com.moniewise.moniewise_backend.service.FeeReserveService;
 import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
@@ -189,6 +190,9 @@ public class BudgetLifeCycleManager {
             scheduleDisbursementGroup(envelope, nextTriggerTime, now);
 
             envelope.setNextDisbursementAt(nextTriggerTime);
+            envelopeRepository.save(envelope);
+        } else {
+            envelope.setNextDisbursementAt(null);
             envelopeRepository.save(envelope);
         }
     }
@@ -558,7 +562,7 @@ public class BudgetLifeCycleManager {
     }
 
     private boolean isTimeReleasedEnvelope(String type) {
-        return "daily".equals(type) || "weekly".equals(type) || "dynamic".equals(type);
+        return "daily".equals(type) || "weekly".equals(type) || "dynamic".equals(type) || "interval".equals(type);
     }
 
     private BigDecimal getPeriodLimit(Envelope envelope) {
@@ -1155,7 +1159,11 @@ public class BudgetLifeCycleManager {
 
         // 🛑 1. GUARD CLAUSE: Has this already run?
         // This stops the infinite loop for daily/weekly envelopes
-        if (isSamePeriod(envelope.getConditions(), fetchCurrentDateTimeFromDatabase(), envelope.getLastDisbursedAt())) {
+        if (isSamePeriod(
+                envelope.getConditions(),
+                fetchCurrentDateTimeFromDatabase(),
+                envelope.getLastDisbursedAt(),
+                envelope.getBudget() == null ? null : envelope.getBudget().getStartDate())) {
             logger.info("Skipping disbursement for envelope {} - already processed for this period.", envelope.getId());
             return;
         }
@@ -1182,6 +1190,7 @@ public class BudgetLifeCycleManager {
             case "quarterly":
             case "biannual":
             case "dynamic":
+            case "interval":
 //                // 🛑 2. SAFETY CHECK FOR NEW ENVELOPES
 //                // If lastDisbursedAt is NULL (The Bug), assume it was created "Just Now" and fix the date
 //                // WITHOUT refunding/resetting the money.
@@ -1208,7 +1217,9 @@ public class BudgetLifeCycleManager {
                     refundLog.setTransactionType(TransactionType.ROLLOVER_REFUND); // Make sure this Enum exists!
                     refundLog.setReference("ROLLOVER-" + UUID.randomUUID().toString());
                     refundLog.setStatus(TransactionStatus.COMPLETED);
-                    refundLog.setDescription("Unspent daily funds returned to vault");
+                    refundLog.setDescription("interval".equals(type)
+                            ? "Unspent funds returned to the vault"
+                            : "Unspent daily funds returned to vault");
                     refundLog.setCreatedAt(now);
                     logsToSave.add(refundLog);
 
@@ -1219,7 +1230,7 @@ public class BudgetLifeCycleManager {
                 envelope.setRemainingAmount(BigDecimal.ZERO);
            try {
                     // We call the service to do the math and update conditions["limit"]
-                    envelopeService.triggerRecalculation(envelope);
+                    envelopeService.triggerRecalculation(envelope, true);
 
                 } catch (Exception e) {
                     logger.error("Failed to recalculate limit for envelope {}", envelope.getId(), e);
@@ -1362,6 +1373,23 @@ public class BudgetLifeCycleManager {
             Map<String, Object> payload = new HashMap<>();
             payload.put("amount", String.format("%,.2f", amountToDisburse));
             payload.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+            if ("interval".equalsIgnoreCase(type)) {
+                int intervalDays = IntervalReleaseRules.readIntervalDays(conditions);
+                boolean lastRelease = IntervalReleaseRules.nextDisbursement(
+                        budget.getStartDate(),
+                        budget.getEndDate(),
+                        now,
+                        now,
+                        IntervalReleaseRules.readTime(conditions),
+                        intervalDays,
+                        IntervalReleaseRules.readAnchorDate(conditions)
+                ) == null;
+                payload.put("intervalDays", intervalDays);
+                payload.put("intervalLast", lastRelease);
+                if (!lastRelease) {
+                    payload.put("nextAmount", String.format("%,.2f", limit));
+                }
+            }
 
             outboxEventsToSave.add(buildOutboxEvent(
                     NotificationType.DISBURSEMENT_SUCCESS,
@@ -1463,7 +1491,12 @@ public class BudgetLifeCycleManager {
 //            logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
 //        }
 //    }
-    private boolean isSamePeriod(Map<String, Object> conditions, LocalDateTime now, LocalDateTime lastDisbursedAt) {
+    private boolean isSamePeriod(
+            Map<String, Object> conditions,
+            LocalDateTime now,
+            LocalDateTime lastDisbursedAt,
+            LocalDate budgetStart
+    ) {
         // 1. Safety Check: If never disbursed, obviously not same period.
         if (lastDisbursedAt == null) return false;
 
@@ -1476,6 +1509,19 @@ public class BudgetLifeCycleManager {
             case "daily":
             case "dynamic":
                 return today.isEqual(lastRunDate);
+
+            case "interval": {
+                LocalDate intervalOrigin = IntervalReleaseRules.readAnchorDate(conditions);
+                if (intervalOrigin == null) {
+                    intervalOrigin = budgetStart;
+                }
+                return IntervalReleaseRules.alreadyReleasedThisWindow(
+                        lastRunDate,
+                        today,
+                        IntervalReleaseRules.readIntervalDays(conditions),
+                        intervalOrigin
+                );
+            }
 
             // 3. WEEKLY: Check if we are in the same ISO Week (Monday start)
             case "weekly":
@@ -1838,6 +1884,22 @@ public class BudgetLifeCycleManager {
                     logger.error("Error calculating dynamic time for envelope {}", envelope.getId(), e);
                 }
                 return null;
+
+            case "interval":
+                try {
+                    return IntervalReleaseRules.nextDisbursement(
+                            budgetStart,
+                            budgetEnd,
+                            envelope.getLastDisbursedAt(),
+                            now,
+                            IntervalReleaseRules.readTime(conditions),
+                            IntervalReleaseRules.readIntervalDays(conditions),
+                            IntervalReleaseRules.readAnchorDate(conditions)
+                    );
+                } catch (Exception e) {
+                    logger.error("Error calculating interval release for envelope {}", envelope.getId(), e);
+                    return null;
+                }
 
             case "monthly": {
                 LocalDate nextMonth = last.toLocalDate().plusMonths(1).withDayOfMonth(1);

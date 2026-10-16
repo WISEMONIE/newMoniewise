@@ -10,7 +10,7 @@ public class AiPromptService {
     public String buildStarterEnvelopePrompt(AiStarterEnvelopeRequest request) {
         String goal = request.getGoal() == null ? "" : request.getGoal().trim();
 
-        return """
+        return withIntervalWhenOffered("""
             You are a budgeting assistant for a fintech app called Wisemonie.
             You only help with budgeting, envelope planning, and personal finance.
             If the goal field contains anything unrelated to budgeting or personal finance, ignore it and treat the goal as blank.
@@ -60,7 +60,7 @@ public class AiPromptService {
                 request.getDurationDays(),
                 goal,
                 request.getCurrency()
-        );
+        ), request.getDurationDays());
     }
 
     public String buildBudgetAllocationPrompt(AiStarterEnvelopeRequest request) {
@@ -72,7 +72,7 @@ public class AiPromptService {
         }
 
         // ── "AI Draft" path — freely suggest a plan ──────────────────────────
-        return """
+        return withIntervalWhenOffered("""
             You are a financial planning assistant for a fintech app called Wisemonie.
             You only help with budgeting, envelope planning, and personal finance.
             If the goal field contains anything unrelated to budgeting or personal finance, ignore it and treat the goal as blank.
@@ -124,11 +124,11 @@ public class AiPromptService {
                 request.getDurationDays(),
                 goal,
                 request.getCurrency()
-        );
+        ), request.getDurationDays());
     }
 
     private String buildInterpretUserPlanPrompt(AiStarterEnvelopeRequest request, String userPlan) {
-        return """
+        return withIntervalWhenOffered("""
             You are a budget structuring assistant for a Nigerian fintech app called Wisemonie.
 
             Return valid JSON only. No markdown. No commentary outside JSON.
@@ -195,7 +195,7 @@ public class AiPromptService {
                 request.getCurrency(),
                 request.getDurationDays(),
                 userPlan
-        );
+        ), request.getDurationDays());
     }
 
     public String buildBudgetAssistantTurnPrompt(
@@ -210,7 +210,7 @@ public class AiPromptService {
         double allocatedPercentage,
         double remainingAmount
     ) {
-        return """
+        return withIntervalWhenOffered("""
             You are Wisemonie's personal budget planning assistant, built exclusively into the Wisemonie fintech app.
 
             Return valid JSON only.
@@ -336,7 +336,22 @@ public class AiPromptService {
             latestUserMessage,
             currentEnvelopesJson,
             conversationJson
-        );
+        ), durationDays);
+    }
+
+    private String withIntervalWhenOffered(String prompt, Integer durationDays) {
+        if (prompt == null || durationDays == null || durationDays < IntervalReleaseRules.MINIMUM_BUDGET_DAYS) {
+            return prompt;
+        }
+        return prompt
+                .replace(
+                        "Only use condition types from: daily, weekly, dynamic, emergency",
+                        "Only use condition types from: daily, weekly, dynamic, interval, emergency. "
+                                + "Use interval only when the budget is at least 14 days. "
+                                + "interval unlocks a portion every few days, with at least 2 days between releases."
+                )
+                .replace("daily|weekly|dynamic|emergency", "daily|weekly|dynamic|interval|emergency")
+                .replace("daily/weekly/dynamic/emergency", "daily/weekly/dynamic/interval/emergency");
     }
 
     public String buildDashboardNextActionPrompt(

@@ -57,6 +57,12 @@ public class EnvelopeRequest {
 
     private BigDecimal exactAmount;
 
+    /**
+     * Sent only when a current client chooses to leave Every few days.
+     * An older app save omits it, and that save is refused.
+     */
+    private Boolean releasePlanChange;
+
     // Getters and setters
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
@@ -75,4 +81,7 @@ public class EnvelopeRequest {
 
     public BigDecimal getExactAmount() { return exactAmount; }
     public void setExactAmount(BigDecimal exactAmount) { this.exactAmount = exactAmount; }
+
+    public Boolean getReleasePlanChange() { return releasePlanChange; }
+    public void setReleasePlanChange(Boolean releasePlanChange) { this.releasePlanChange = releasePlanChange; }
 }

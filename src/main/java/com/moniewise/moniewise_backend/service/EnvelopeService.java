@@ -37,6 +37,7 @@ import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -626,6 +627,25 @@ public class EnvelopeService {
                 periodStart = now.toLocalDate().atStartOfDay();
                 break;
 
+            case "interval":
+                LocalTime intervalTime = IntervalReleaseRules.readTime(conditions);
+                if (envelope.getLastDisbursedAt() == null) {
+                    LocalDate intervalStart = budget.getStartDate() != null
+                            ? budget.getStartDate()
+                            : now.toLocalDate();
+                    LocalDateTime firstRelease = intervalStart.atTime(intervalTime);
+                    if (now.isBefore(firstRelease)) {
+                        envelope.setRemainingAmount(BigDecimal.ZERO);
+                        envelopeRepository.save(envelope);
+                        return BigDecimal.ZERO;
+                    }
+                    periodStart = firstRelease;
+                } else {
+                    // Quiet days keep the open slice. Spending counts from the release that opened it.
+                    periodStart = envelope.getLastDisbursedAt();
+                }
+                break;
+
             case "weekly":
                 periodStart = now.toLocalDate().minusDays(now.getDayOfWeek().getValue() - 1).atStartOfDay();
                 break;
@@ -881,6 +901,18 @@ public class EnvelopeService {
                     LocalTime startTime = LocalTime.parse(dailyTimeStr);
                     if (!createdToday && now.toLocalTime().isBefore(startTime)) {
                         throw new IllegalArgumentException("Daily funds are locked until " + startTime);
+                    }
+                }
+                break;
+
+            case "interval":
+                if (source.getLastDisbursedAt() == null) {
+                    LocalTime intervalTime = IntervalReleaseRules.readTime(conditions);
+                    LocalDate intervalStart = budget.getStartDate() != null
+                            ? budget.getStartDate()
+                            : now.toLocalDate();
+                    if (now.isBefore(intervalStart.atTime(intervalTime))) {
+                        throw new IllegalArgumentException("These funds unlock at " + intervalTime);
                     }
                 }
                 break;
@@ -1416,6 +1448,14 @@ public class EnvelopeService {
         validateEnvelopeConditions(request, amount, (int) budgetDurationDays);
 
         Map<String, Object> conditions = request.getConditions();
+        if (conditions != null) {
+            conditions.remove("releasePlanChange");
+            if ("interval".equalsIgnoreCase(String.valueOf(conditions.getOrDefault("type", "")))) {
+                // A new envelope always counts from the budget start. The anchor
+                // is written only when someone later edits the gap.
+                conditions.remove("intervalAnchorDate");
+            }
+        }
         String type = "standard";
         if (conditions != null && conditions.containsKey("type")) {
             type = (String) conditions.get("type");
@@ -1427,6 +1467,9 @@ public class EnvelopeService {
                     conditions.putIfAbsent("gracePeriodMinutes", 30);
                     break;
                 case "dynamic":
+                    conditions.putIfAbsent("gracePeriodMinutes", 30);
+                    break;
+                case "interval":
                     conditions.putIfAbsent("gracePeriodMinutes", 30);
                     break;
                 case "safe_lock":
@@ -1465,7 +1508,8 @@ public class EnvelopeService {
             envelope.setRemainingAmount(BigDecimal.ZERO);
         } else if ("emergency".equalsIgnoreCase(typez)) {
             envelope.setRemainingAmount(amount);
-        } else if ("daily".equalsIgnoreCase(typez) || "weekly".equalsIgnoreCase(typez) || "dynamic".equalsIgnoreCase(typez)) {
+        } else if ("daily".equalsIgnoreCase(typez) || "weekly".equalsIgnoreCase(typez)
+                || "dynamic".equalsIgnoreCase(typez) || "interval".equalsIgnoreCase(typez)) {
             boolean firstDisbursementIsToday = firstDisbursement != null
                     && firstDisbursement.toLocalDate().isEqual(now.toLocalDate());
             if (firstDisbursementIsToday) {
@@ -1523,10 +1567,61 @@ public class EnvelopeService {
                 ? java.time.temporal.ChronoUnit.DAYS.between(b.getStartDate(), b.getEndDate()) + 1
                 : (b.getDurationDays() != null ? b.getDurationDays() : 30L);
         if (updDuration <= 0) updDuration = 1;
+
+        Map<String, Object> storedConditions = envelope.getConditions();
+        String storedType = storedConditions == null
+                ? ""
+                : String.valueOf(storedConditions.getOrDefault("type", ""));
+        Map<String, Object> incoming = request.getConditions();
+        String updatedType = incoming == null ? "" : String.valueOf(incoming.getOrDefault("type", ""));
+        boolean leavingInterval = "interval".equalsIgnoreCase(storedType)
+                && !"interval".equalsIgnoreCase(updatedType);
+        if (leavingInterval && !releasePlanChangeRequested(request)) {
+            throw new IllegalArgumentException(
+                    "This envelope releases every few days. Update Wisemonie to change that release plan.");
+        }
+
         validateEnvelopeConditions(request, envelope.getAmount(), (int) updDuration);
-        envelope.setConditions(request.getConditions());
-        envelope.setRemainingAmount(getPeriodLimit(request.getConditions()));
+
+        Map<String, Object> nextConditions = new HashMap<>();
+        if (incoming != null) {
+            nextConditions.putAll(incoming);
+        }
+        nextConditions.remove("releasePlanChange");
+        if ("interval".equalsIgnoreCase(updatedType)) {
+            int previousGap = IntervalReleaseRules.readIntervalDays(storedConditions);
+            int nextGap = IntervalReleaseRules.readIntervalDays(nextConditions);
+            if (previousGap != nextGap) {
+                LocalDate anchor = envelope.getLastDisbursedAt() != null
+                        ? envelope.getLastDisbursedAt().toLocalDate()
+                        : b.getStartDate();
+                if (anchor != null) {
+                    nextConditions.put("intervalAnchorDate", anchor.toString());
+                }
+            } else {
+                LocalDate previousAnchor = IntervalReleaseRules.readAnchorDate(storedConditions);
+                if (previousAnchor != null) {
+                    nextConditions.put("intervalAnchorDate", previousAnchor.toString());
+                } else {
+                    nextConditions.remove("intervalAnchorDate");
+                }
+            }
+        }
+        BigDecimal previousPocket = envelope.getRemainingAmount() == null
+                ? BigDecimal.ZERO
+                : envelope.getRemainingAmount();
+        envelope.setConditions(nextConditions);
+        if ("interval".equalsIgnoreCase(updatedType)) {
+            recalculateTargetEnvelopeLimit(envelope, b);
+            keepOpenIntervalPocket(envelope, b, previousPocket);
+        } else {
+            envelope.setRemainingAmount(getPeriodLimit(envelope.getConditions()));
+        }
         envelopeRepository.save(envelope);
+        if (("interval".equalsIgnoreCase(storedType) || "interval".equalsIgnoreCase(updatedType))
+                && b.getStatus() == BudgetStatus.ACTIVE) {
+            budgetLifeCycleManager.scheduleDynamicTasks(envelope);
+        }
 
         // Ã¢Å“â€¦ ADD NEW EVENT
         Map<String, Object> params = Map.of(
@@ -1729,7 +1824,7 @@ public class EnvelopeService {
         Map<String, Object> conditions = envelope.getConditions();
         if (conditions != null && conditions.containsKey("type")) {
             String type = conditions.get("type").toString();
-            if (List.of("daily", "weekly", "dynamic").contains(type)) {
+            if (List.of("daily", "weekly", "dynamic", "interval").contains(type)) {
                 envelope.setRemainingAmount(getPeriodLimit(conditions));
                 envelopeRepository.save(envelope);
             }
@@ -1744,9 +1839,13 @@ public class EnvelopeService {
     }
 
     private void recalculateTargetEnvelopeLimit(Envelope envelope, Budget budget) {
+        recalculateTargetEnvelopeLimit(envelope, budget, false);
+    }
+
+    private void recalculateTargetEnvelopeLimit(Envelope envelope, Budget budget, boolean countThisOffGridMorning) {
         String type = (String) envelope.getConditions().get("type");
         if (type == null) return;
-        if (!Set.of("daily", "weekly", "dynamic").contains(type)) {
+        if (!Set.of("daily", "weekly", "dynamic", "interval").contains(type)) {
             return;
         }
 
@@ -1772,6 +1871,24 @@ public class EnvelopeService {
             }
             case "weekly" -> {
                 remainingUnits = ChronoUnit.WEEKS.between(effectiveStart, budgetEnd) + 1;
+                if (remainingUnits <= 0) remainingUnits = 1;
+                newLimit = totalRemaining.divide(BigDecimal.valueOf(remainingUnits), 2, RoundingMode.HALF_UP);
+            }
+            case "interval" -> {
+                int intervalDays = IntervalReleaseRules.readIntervalDays(envelope.getConditions());
+                if (intervalDays < IntervalReleaseRules.MINIMUM_INTERVAL_DAYS) {
+                    intervalDays = IntervalReleaseRules.MINIMUM_INTERVAL_DAYS;
+                }
+                LocalDate origin = IntervalReleaseRules.readAnchorDate(envelope.getConditions());
+                if (origin == null) {
+                    origin = budget.getStartDate() != null ? budget.getStartDate() : effectiveStart;
+                }
+                remainingUnits = IntervalReleaseRules.releaseCountOnGrid(
+                        origin, effectiveStart, budgetEnd, intervalDays);
+                if (countThisOffGridMorning
+                        && !IntervalReleaseRules.isOnGrid(origin, effectiveStart, intervalDays)) {
+                    remainingUnits += 1;
+                }
                 if (remainingUnits <= 0) remainingUnits = 1;
                 newLimit = totalRemaining.divide(BigDecimal.valueOf(remainingUnits), 2, RoundingMode.HALF_UP);
             }
@@ -1834,7 +1951,69 @@ public class EnvelopeService {
     }
 
     public void triggerRecalculation(Envelope envelope) {
-        recalculateTargetEnvelopeLimit(envelope, envelope.getBudget());
+        triggerRecalculation(envelope, false);
+    }
+
+    /**
+     * @param countThisOffGridMorning a catch-up payment is one slice even when
+     *                                 today is not one of the original grid dates
+     */
+    public void triggerRecalculation(Envelope envelope, boolean countThisOffGridMorning) {
+        recalculateTargetEnvelopeLimit(envelope, envelope.getBudget(), countThisOffGridMorning);
+    }
+
+    private boolean releasePlanChangeRequested(EnvelopeRequest request) {
+        if (request == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(request.getReleasePlanChange())) {
+            return true;
+        }
+        Map<String, Object> conditions = request.getConditions();
+        if (conditions == null || conditions.get("releasePlanChange") == null) {
+            return false;
+        }
+        Object flag = conditions.get("releasePlanChange");
+        if (flag instanceof Boolean bool) {
+            return bool;
+        }
+        return "true".equalsIgnoreCase(flag.toString().trim());
+    }
+
+    /**
+     * An edit stores the next portion. It does not open a fresh slice.
+     * Before the first clock the pocket stays empty. An open slice is left
+     * as it is, including when the new portion is larger.
+     */
+    private void keepOpenIntervalPocket(Envelope envelope, Budget budget, BigDecimal previousPocket) {
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        Map<String, Object> conditions = envelope.getConditions();
+        BigDecimal pocket = previousPocket == null ? BigDecimal.ZERO : previousPocket;
+        BigDecimal newLimit = getPeriodLimit(conditions);
+        if (envelope.getLastDisbursedAt() == null) {
+            LocalDate start = budget.getStartDate() != null ? budget.getStartDate() : now.toLocalDate();
+            if (now.isBefore(start.atTime(IntervalReleaseRules.readTime(conditions)))) {
+                envelope.setRemainingAmount(BigDecimal.ZERO);
+                return;
+            }
+            envelope.setRemainingAmount(pocket.min(newLimit));
+            return;
+        }
+        LocalDate origin = IntervalReleaseRules.readAnchorDate(conditions);
+        if (origin == null) {
+            origin = budget.getStartDate();
+        }
+        boolean windowOpen = IntervalReleaseRules.alreadyReleasedThisWindow(
+                envelope.getLastDisbursedAt().toLocalDate(),
+                now.toLocalDate(),
+                IntervalReleaseRules.readIntervalDays(conditions),
+                origin
+        );
+        if (windowOpen) {
+            envelope.setRemainingAmount(pocket);
+            return;
+        }
+        envelope.setRemainingAmount(pocket.min(newLimit));
     }
 
     private String getSafeName(User user) {
@@ -1912,6 +2091,9 @@ public class EnvelopeService {
                 "A weekly release plan requires at least 14 days. " +
                 "Your budget is only " + budgetDurationDays + " day(s).");
         }
+        if ("interval".equals(type)) {
+            IntervalReleaseRules.validate(budgetDurationDays, IntervalReleaseRules.readIntervalDays(conditions));
+        }
 
         // ── Structural field validation ───────────────────────────────────────────
         switch (type) {
@@ -1934,6 +2116,19 @@ public class EnvelopeService {
             case "biannual":
                 if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
                     throw new IllegalArgumentException(type + " envelope must include a numeric 'limit'");
+                }
+                break;
+            case "interval":
+                if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
+                    throw new IllegalArgumentException("Every few days must include a numeric 'limit'");
+                }
+                if (!conditions.containsKey("disbursementTime")) {
+                    throw new IllegalArgumentException("Every few days must include 'disbursementTime'");
+                }
+                try {
+                    LocalTime.parse(conditions.get("disbursementTime").toString());
+                } catch (DateTimeParseException e) {
+                    throw new IllegalArgumentException("Invalid disbursementTime format: " + conditions.get("disbursementTime"));
                 }
                 break;
             case "dynamic":
@@ -2007,6 +2202,17 @@ public class EnvelopeService {
                     LocalTime startTime = LocalTime.parse((String) conditions.get("disbursementTime"));
                     // STRICT: If not created today AND time is early -> HIDE MONEY
                     if (!createdToday && now.toLocalTime().isBefore(startTime)) {
+                        return BigDecimal.ZERO;
+                    }
+                }
+            }
+            else if ("interval".equals(type)) {
+                if (envelope.getLastDisbursedAt() == null && conditions.containsKey("disbursementTime")) {
+                    LocalTime startTime = IntervalReleaseRules.readTime(conditions);
+                    LocalDate intervalStart = budget.getStartDate() != null
+                            ? budget.getStartDate()
+                            : now.toLocalDate();
+                    if (now.isBefore(intervalStart.atTime(startTime))) {
                         return BigDecimal.ZERO;
                     }
                 }
