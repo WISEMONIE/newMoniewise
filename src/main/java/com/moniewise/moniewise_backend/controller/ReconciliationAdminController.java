@@ -23,6 +23,7 @@ import java.util.Map;
  *   <li>{@code GET  /admin/reconciliation/status/{userId}} — see the gap without side effects</li>
  *   <li>{@code POST /admin/reconciliation/dry-run/{userId}} — preview which missed credits would be applied</li>
  *   <li>{@code POST /admin/reconciliation/heal-user/{userId}} — actually apply them (idempotent by paymentReference)</li>
+ *   <li>{@code GET  /admin/reconciliation/revenue} — revenue, PayeeLord cost still in the account, and the Rubies balance</li>
  * </ol>
  */
 @RestController
@@ -105,6 +106,19 @@ public class ReconciliationAdminController {
      * path the scheduler runs at 2 AM Lagos. Useful for testing configuration changes
      * without waiting for the next cron cycle.
      */
+    /**
+     * GET /admin/reconciliation/revenue
+     *
+     * <p>Read-only split of the revenue account: database revenue, PayeeLord cost
+     * still sitting in the account (the amount available to send back), markup
+     * not yet in the revenue balance, missing wallet-opening fees, expected
+     * Rubies, actual Rubies, and the unexplained remainder. Does not move money.
+     */
+    @GetMapping("/revenue")
+    public ResponseEntity<?> revenuePosition() {
+        return ResponseEntity.ok(reconciliationService.reconcileRevenueWallet());
+    }
+
     @PostMapping("/run-daily")
     public ResponseEntity<?> runDaily(@RequestParam(required = false, defaultValue = RubiesGateway.PROVIDER_NAME) String providerName,
                                       Authentication auth) {

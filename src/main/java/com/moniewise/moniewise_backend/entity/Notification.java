@@ -26,6 +26,10 @@ public class Notification {
     @Column(nullable = false)
     private String message;
 
+    /** Lock-screen title. Null on older rows; redelivery then uses the type title. */
+    @Column(length = 255)
+    private String title;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

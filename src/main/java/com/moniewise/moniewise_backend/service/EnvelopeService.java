@@ -75,6 +75,7 @@ public class EnvelopeService {
     private final ProcessingTransferRecoveryScheduler transferRecoveryScheduler;
     private final PayeelordVasTransactionRepository vasTransactionRepository;
     private final ActivationJourneyNudgeService activationJourneyNudgeService;
+    private final FeeReserveService feeReserveService;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -96,7 +97,8 @@ public class EnvelopeService {
             MonnieCacheInvalidationService monnieCacheInvalidationService,
             @Lazy ProcessingTransferRecoveryScheduler transferRecoveryScheduler,
             PayeelordVasTransactionRepository vasTransactionRepository,
-            ActivationJourneyNudgeService activationJourneyNudgeService) {
+            ActivationJourneyNudgeService activationJourneyNudgeService,
+            @Lazy FeeReserveService feeReserveService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -119,6 +121,7 @@ public class EnvelopeService {
         this.transferRecoveryScheduler = transferRecoveryScheduler;
         this.vasTransactionRepository = vasTransactionRepository;
         this.activationJourneyNudgeService = activationJourneyNudgeService;
+        this.feeReserveService = feeReserveService;
     }
 
     @PostConstruct
@@ -1024,6 +1027,13 @@ public class EnvelopeService {
                     availableVaultBalance));
         }
 
+        // Move fee reserve funds into wallet before the deduction so the user's
+        // reserved fee cover helps pay transfer charges.
+        try {
+            feeReserveService.coverFeesFromReserve(user.getId(), totalFee);
+        } catch (Exception e) {
+            logger.warn("[FeeReserve] Reserve fee cover failed for user {} — fees from wallet only", user.getId(), e);
+        }
         // Wallet fee check — deduct fees (NIP + markup) from the main wallet now.
         // If the wallet can't cover them, this throws with a user-friendly message
         // before any envelope state is touched.

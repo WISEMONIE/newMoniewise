@@ -364,24 +364,24 @@ public class BudgetService {
 
             Long targetSavingsGoalId = parseLong(conditions.get("targetSavingsGoalId"));
             if (targetSavingsGoalId == null) {
-                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' must select a valid savings pot.");
+                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' must select an event.");
             }
 
             SavingsGoal goal = savingsGoalRepository.findById(targetSavingsGoalId)
                     .orElseThrow(() -> new IllegalArgumentException(
-                            "'" + envelopeRequest.getName() + "' points to a savings pot that no longer exists."));
+                            "'" + envelopeRequest.getName() + "' points to an event that no longer exists."));
 
             if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(user.getId())) {
-                throw new SecurityException("'" + envelopeRequest.getName() + "' points to a savings pot outside your account.");
+                throw new SecurityException("'" + envelopeRequest.getName() + "' points to an event outside your account.");
             }
             if (goal.getStatus() != SavingsStatus.ACTIVE) {
-                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' cannot sweep into an inactive savings pot.");
+                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' cannot move money into an event that has ended.");
             }
             if (goal.getMaturityDate() == null || !request.getStartDate().isBefore(goal.getMaturityDate())) {
                 throw new IllegalArgumentException("'" + envelopeRequest.getName()
-                        + "' cannot sweep into '" + goal.getName()
-                        + "' because that savings pot matures on " + goal.getMaturityDate()
-                        + ". Choose a savings pot that matures after the budget start date, or remove the sweep.");
+                        + "' cannot move money into '" + goal.getName()
+                        + "' because that event ends on " + goal.getMaturityDate()
+                        + ". Choose an event that ends after the budget starts, or remove the link.");
             }
         }
     }
@@ -938,7 +938,11 @@ public class BudgetService {
                         envelopeRepository.save(envelope);
                     } catch (Exception e) {
                         logger.error("Failed to sweep envelope to savings for user {}", user.getId(), e);
-                        throw new IllegalStateException("Failed to process savings sweep");
+                        String detail = e.getMessage();
+                        if (detail == null || detail.isBlank()) {
+                            detail = "Failed to process savings sweep";
+                        }
+                        throw new IllegalStateException(detail);
                     }
                 }
             }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your savings has matured</title>
+  <title>Your event is ready</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -137,8 +137,8 @@
       <p class="greeting">Hey <span th:text="${firstName}">there</span>,</p>
 
       <p class="body-text">
-        Congratulations! <strong th:text="${goalName}">this goal</strong> has officially matured.
-        Every naira you set aside is now ready for you.
+        <strong th:text="${goalName}">This event</strong> is ready.
+        The money you set aside can move now.
       </p>
 
       <div class="summary">
@@ -157,36 +157,34 @@
       </div>
 
       <p th:unless="${hasInterest}" class="no-interest-note">
-        <strong>Please note:</strong> Wisemonie savings goals do not earn interest at this time.
-        Your payout is exactly what you saved. Interest-earning savings are on our roadmap.
+        <strong>Please note:</strong> Events do not earn interest.
+        The payout is the money you put in.
       </p>
 
       <p class="body-text" style="margin-bottom: 10px;">
-        <strong>Open the Wisemonie app and head to Savings.</strong> You'll find three ways to take it from here:
+        <strong>Open the Wisemonie app and head to Events.</strong> You can move the money in three ways:
       </p>
 
       <div class="info-row">
         <div class="info-icon">🏦</div>
         <div class="info-text">
           <strong>Send to your bank</strong><br>
-          Tap "Bank" on the goal card. It moves the full payout into your wallet, then walks you
-          straight into sending it to your linked bank account.
+          Send it to a bank account. A fee applies, and Wisemonie asks for your PIN.
         </div>
       </div>
       <div class="info-row">
         <div class="info-icon">👛</div>
         <div class="info-text">
           <strong>Keep it in your wallet</strong><br>
-          Tap "Wallet" to bring the payout into your Wisemonie wallet, ready to spend, fund a budget,
-          or seed a new savings goal whenever you like.
+          Move it into your Wisemonie wallet, ready to spend, fund a budget,
+          or start a new event.
         </div>
       </div>
       <div class="info-row">
         <div class="info-icon">🤝</div>
         <div class="info-text">
           <strong>Send to a friend</strong><br>
-          Send some (or all) of it straight to another Wisemonie user. Perfect for shared goals,
-          gifts, or settling up.
+          Send some, or all of it, to another Wisemonie user.
         </div>
       </div>
 
@@ -199,7 +197,7 @@
     <div class="card-footer">
       <div class="footer-brand">Wisemonie</div>
       <p class="footer-text">
-        You're receiving this because a savings goal on your Wisemonie account just matured.<br>
+        You're receiving this because an event on your Wisemonie account is ready.<br>
         Questions? <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
       </p>
       <div class="social-row">

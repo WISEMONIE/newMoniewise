@@ -141,7 +141,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex, WebRequest request) {
-        if (ExceptionClassifier.isDatabasePoolExhausted(ex)) {
+        if (ExceptionClassifier.isTransientConnectionError(ex)) {
             return handleDatabaseTemporarilyUnavailable(ex, request);
         }
         String correlationId = UUID.randomUUID().toString();

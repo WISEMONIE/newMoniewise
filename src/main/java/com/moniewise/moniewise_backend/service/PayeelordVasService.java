@@ -5,7 +5,6 @@ import com.moniewise.moniewise_backend.dto.request.AirtimePurchaseRequest;
 import com.moniewise.moniewise_backend.dto.request.DataPurchaseRequest;
 import com.moniewise.moniewise_backend.entity.PayeelordDataPlan;
 import com.moniewise.moniewise_backend.entity.PayeelordVasTransaction;
-import com.moniewise.moniewise_backend.entity.RevenueLog;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
@@ -21,7 +20,6 @@ import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordWebhookPayload
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.PayeelordDataPlanRepository;
 import com.moniewise.moniewise_backend.repository.PayeelordVasTransactionRepository;
-import com.moniewise.moniewise_backend.repository.RevenueLogRepository;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -97,7 +95,6 @@ public class PayeelordVasService {
     private final PayeelordDataPlanRepository dataPlanRepository;
     private final PayeelordVasTransactionRepository transactionRepository;
     private final TransactionLogRepository transactionLogRepository;
-    private final RevenueLogRepository revenueLogRepository;
     private final NotificationService notificationService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final ActivationJourneyNudgeService activationJourneyNudgeService;
@@ -113,7 +110,6 @@ public class PayeelordVasService {
                                PayeelordDataPlanRepository dataPlanRepository,
                                PayeelordVasTransactionRepository transactionRepository,
                                TransactionLogRepository transactionLogRepository,
-                               RevenueLogRepository revenueLogRepository,
                                NotificationService notificationService,
                                MonnieCacheInvalidationService monnieCacheInvalidationService,
                                ActivationJourneyNudgeService activationJourneyNudgeService,
@@ -128,7 +124,6 @@ public class PayeelordVasService {
         this.dataPlanRepository = dataPlanRepository;
         this.transactionRepository = transactionRepository;
         this.transactionLogRepository = transactionLogRepository;
-        this.revenueLogRepository = revenueLogRepository;
         this.notificationService = notificationService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.activationJourneyNudgeService = activationJourneyNudgeService;
@@ -384,7 +379,6 @@ public class PayeelordVasService {
                 envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
             }
             collectRubiesPayment(txn);
-            logVasMarkupRevenue(txn);
             upsertLedgerEntry(txn, describeVasPurchase(txn), TransactionStatus.COMPLETED);
             logger.info("[PayeelordVAS] Airtime purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
@@ -447,7 +441,6 @@ public class PayeelordVasService {
                 envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
             }
             collectRubiesPayment(txn);
-            logVasMarkupRevenue(txn);
             upsertLedgerEntry(txn, describeVasPurchase(txn, planLabel), TransactionStatus.COMPLETED);
             logger.info("[PayeelordVAS] Data purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
@@ -691,30 +684,11 @@ public class PayeelordVasService {
                     wallet.getProviderWalletRef(),
                     debitName,
                     txn.getReference(),
-                    txn.getUserId());
+                    txn.getUserId(),
+                    txn.getCostAmount(),
+                    txn.getMarginAmount());
         } catch (Exception e) {
             logger.error("[PayeelordVAS] Rubies P2P collection failed to enqueue for ref={}: {}",
-                    txn.getReference(), e.getMessage());
-        }
-    }
-
-    private void logVasMarkupRevenue(PayeelordVasTransaction txn) {
-        try {
-            BigDecimal margin = txn.getMarginAmount();
-            if (margin == null || margin.compareTo(BigDecimal.ZERO) <= 0) {
-                return;
-            }
-            RevenueLog log = new RevenueLog();
-            log.setUserId(txn.getUserId());
-            log.setType("vas_markup");
-            log.setAmount(margin);
-            log.setDescription(String.format("VAS markup on %s %s purchase ref=%s (sold ₦%,.2f, cost ₦%,.2f)",
-                    txn.getNetwork(), txn.getType().name().toLowerCase(), txn.getReference(),
-                    txn.getSellingAmount(), txn.getCostAmount()));
-            log.setCreatedAt(LocalDateTime.now());
-            revenueLogRepository.save(log);
-        } catch (Exception e) {
-            logger.error("[PayeelordVAS] Failed to log VAS markup revenue for ref={}: {}",
                     txn.getReference(), e.getMessage());
         }
     }

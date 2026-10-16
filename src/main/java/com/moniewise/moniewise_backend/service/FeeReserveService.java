@@ -31,28 +31,28 @@ public class FeeReserveService {
     private final FeeReserveTransactionRepository feeReserveTransactionRepository;
     private final FeeReserveEstimateRepository feeReserveEstimateRepository;
     private final WalletRepository walletRepository;
-    private final MarkupCalculatorService markupCalculatorService;
 
     public FeeReserveService(FeeReserveRepository feeReserveRepository,
                              FeeReserveTransactionRepository feeReserveTransactionRepository,
                              FeeReserveEstimateRepository feeReserveEstimateRepository,
-                             WalletRepository walletRepository,
-                             MarkupCalculatorService markupCalculatorService) {
+                             WalletRepository walletRepository) {
         this.feeReserveRepository = feeReserveRepository;
         this.feeReserveTransactionRepository = feeReserveTransactionRepository;
         this.feeReserveEstimateRepository = feeReserveEstimateRepository;
         this.walletRepository = walletRepository;
-        this.markupCalculatorService = markupCalculatorService;
     }
 
     // ── Estimation ─────────────────────────────────────────────────
 
+    private static final BigDecimal DAILY_RATE_LOW  = new BigDecimal("13");
+    private static final BigDecimal DAILY_RATE_HIGH = new BigDecimal("26");
+    private static final BigDecimal TIER_THRESHOLD  = new BigDecimal("5000");
+
     public record EnvelopeFeeEstimate(
             Long envelopeId,
             BigDecimal envelopeAmount,
-            BigDecimal nipFee,
-            BigDecimal stampDuty,
-            BigDecimal markup,
+            BigDecimal dailyRate,
+            int durationDays,
             BigDecimal total
     ) {}
 
@@ -68,25 +68,21 @@ public class FeeReserveService {
         List<EnvelopeFeeEstimate> estimates = new ArrayList<>();
         BigDecimal totalEstimated = BigDecimal.ZERO;
 
+        int durationDays = budget.getDurationDays() != null ? budget.getDurationDays() : 30;
+
         for (Envelope envelope : envelopes) {
-            // Skip savings sweep envelopes — they move money internally, not via NIP
             Map<String, Object> conditions = envelope.getConditions();
             if (conditions != null && "savings_sweep".equals(conditions.get("type"))) continue;
 
             BigDecimal amount = envelope.getInitialAmount();
             if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) continue;
 
-            MarkupCalculatorService.FeeBreakdown breakdown =
-                    markupCalculatorService.buildBreakdown(amount, user.getId());
-
-            BigDecimal envelopeTotal = breakdown.bankCharge()
-                    .add(breakdown.stampDuty())
-                    .add(breakdown.markupFee());
+            BigDecimal dailyRate = amount.compareTo(TIER_THRESHOLD) < 0
+                    ? DAILY_RATE_LOW : DAILY_RATE_HIGH;
+            BigDecimal envelopeTotal = dailyRate.multiply(BigDecimal.valueOf(durationDays));
 
             estimates.add(new EnvelopeFeeEstimate(
-                    envelope.getId(), amount,
-                    breakdown.bankCharge(), breakdown.stampDuty(), breakdown.markupFee(),
-                    envelopeTotal
+                    envelope.getId(), amount, dailyRate, durationDays, envelopeTotal
             ));
             totalEstimated = totalEstimated.add(envelopeTotal);
         }
@@ -96,8 +92,6 @@ public class FeeReserveService {
 
         BigDecimal additionalNeeded = totalEstimated.subtract(existingBalance).max(BigDecimal.ZERO);
 
-        // Wallet balance is already post-deduction (BudgetService deducts allocation
-        // and creation fee before calling this), so it IS the available surplus.
         BigDecimal walletAfterBudget = walletRepository.findByUserId(user.getId())
                 .map(Wallet::getBalance)
                 .orElse(BigDecimal.ZERO)
@@ -157,9 +151,9 @@ public class FeeReserveService {
             estimate.setBudgetId(budget.getId());
             estimate.setEnvelopeId(est.envelopeId());
             estimate.setEnvelopeAmount(est.envelopeAmount());
-            estimate.setEstimatedNipFee(est.nipFee());
-            estimate.setEstimatedStampDuty(est.stampDuty());
-            estimate.setEstimatedMarkup(est.markup());
+            estimate.setEstimatedNipFee(est.dailyRate());
+            estimate.setEstimatedStampDuty(BigDecimal.ZERO);
+            estimate.setEstimatedMarkup(BigDecimal.valueOf(est.durationDays()));
             estimate.setEstimatedTotal(est.total());
             feeReserveEstimateRepository.save(estimate);
         }

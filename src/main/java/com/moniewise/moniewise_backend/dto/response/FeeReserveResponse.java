@@ -19,15 +19,15 @@ public record FeeReserveResponse(
             Long budgetId,
             Long envelopeId,
             BigDecimal envelopeAmount,
-            BigDecimal nipFee,
-            BigDecimal stampDuty,
-            BigDecimal markup,
+            BigDecimal dailyRate,
+            int durationDays,
             BigDecimal total
     ) {
         public static EstimateDetail from(FeeReserveEstimate e) {
             return new EstimateDetail(
                     e.getBudgetId(), e.getEnvelopeId(), e.getEnvelopeAmount(),
-                    e.getEstimatedNipFee(), e.getEstimatedStampDuty(), e.getEstimatedMarkup(),
+                    e.getEstimatedNipFee(),
+                    e.getEstimatedMarkup() != null ? e.getEstimatedMarkup().intValue() : 0,
                     e.getEstimatedTotal()
             );
         }

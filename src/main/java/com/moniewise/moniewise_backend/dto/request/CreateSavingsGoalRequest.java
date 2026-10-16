@@ -26,6 +26,16 @@ public class CreateSavingsGoalRequest {
 
     private BigDecimal interestRate; // Optional from frontend, we can default it
 
+    /** WEDDING, BIRTHDAY, RENT, SCHOOL, or OTHER. */
+    private String category;
+
+    private Boolean remindWeek;
+    private Boolean remindDayBefore;
+    private Boolean remindMorning;
+
+    /** The create sheet must send true. The server refuses the event otherwise. */
+    private Boolean termsAccepted;
+
     // --- Getters and Setters ---
     
     public String getName() { return name; }
@@ -42,4 +52,19 @@ public class CreateSavingsGoalRequest {
 
     public BigDecimal getInterestRate() { return interestRate; }
     public void setInterestRate(BigDecimal interestRate) { this.interestRate = interestRate; }
+
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+
+    public Boolean getRemindWeek() { return remindWeek; }
+    public void setRemindWeek(Boolean remindWeek) { this.remindWeek = remindWeek; }
+
+    public Boolean getRemindDayBefore() { return remindDayBefore; }
+    public void setRemindDayBefore(Boolean remindDayBefore) { this.remindDayBefore = remindDayBefore; }
+
+    public Boolean getRemindMorning() { return remindMorning; }
+    public void setRemindMorning(Boolean remindMorning) { this.remindMorning = remindMorning; }
+
+    public Boolean getTermsAccepted() { return termsAccepted; }
+    public void setTermsAccepted(Boolean termsAccepted) { this.termsAccepted = termsAccepted; }
 }

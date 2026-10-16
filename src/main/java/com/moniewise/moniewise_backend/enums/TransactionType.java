@@ -88,6 +88,14 @@ public enum TransactionType {
     KYC_BVN_FEE,
 
     /**
+     * Internal deduction from the revenue wallet for the fee Rubies takes
+     * when it opens a customer wallet. One row per user.
+     * Reference pattern: WALLET-OPEN-{userId}
+     * Platform-internal — keep it out of user-facing history.
+     */
+    WALLET_OPEN_FEE,
+
+    /**
      * Refund of the budget creation fee when a scheduled budget is cancelled
      * before activation. User-visible — shows in Activity.
      * Reference pattern: BUD-FEE-REFUND-{budgetId}-{timestamp}

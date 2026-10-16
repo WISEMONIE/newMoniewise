@@ -509,6 +509,35 @@ public class NotificationService {
         }
     }
 
+    /** Same outbox path as {@link #sendNotification}, with a lock-screen title. */
+    public boolean sendTitledNotification(String userId, String title, String message, NotificationType type,
+                                          String actionType, String redirectUrl) {
+        try {
+            if (userId == null || userId.isBlank()) {
+                return false;
+            }
+            Long uId = Long.valueOf(userId);
+            Map<String, Object> payload = new java.util.HashMap<>();
+            if (title != null && !title.isBlank()) payload.put("__title", title);
+            if (message != null) payload.put("__message", message);
+            if (actionType != null) payload.put("__actionType", actionType);
+            if (redirectUrl != null) payload.put("__redirectUrl", redirectUrl);
+
+            OutboxEvent event = new OutboxEvent();
+            event.setEventType(type.name());
+            event.setUserId(uId);
+            event.setPayload(payload);
+            event.setStatus("PENDING");
+            event.setCreatedAt(LocalDateTime.now());
+            event.setTtlSeconds(259_200L);
+            outboxEventRepository.save(event);
+            return true;
+        } catch (Exception e) {
+            logger.error("Failed to enqueue titled notification type {} for user {}", type, userId, e);
+            return false;
+        }
+    }
+
     public void enqueuePushOnlyNotification(Long userId,
                                             NotificationType type,
                                             String title,
@@ -1671,7 +1700,9 @@ public class NotificationService {
 
             setWisemonieSender(helper);
             helper.setTo(email);
-            helper.setSubject("⏳ Your '" + goalName + "' savings is maturing soon");
+            helper.setSubject(daysRemaining == 1
+                    ? goalName + " is tomorrow"
+                    : goalName + " is " + daysRemaining + " days away");
             helper.setText(htmlContent, true);
             attachLogo(helper);
 
@@ -1715,7 +1746,7 @@ public class NotificationService {
 
             setWisemonieSender(helper);
             helper.setTo(email);
-            helper.setSubject("🎉 Your '" + goalName + "' savings has matured!");
+            helper.setSubject(goalName + " is ready");
             helper.setText(htmlContent, true);
             attachLogo(helper);
 
@@ -2173,6 +2204,7 @@ public class NotificationService {
         }
 
         String message = resolveMessage(type, params);
+        String title = resolveTitle(type, params);
         String redirectUrl = resolveRedirectUrl(event, params);
         String actionType = paramString(params, "__actionType");
         String androidExternalUrl = paramString(params, "__androidUrl");
@@ -2190,6 +2222,7 @@ public class NotificationService {
             Notification notification = new Notification();
             notification.setUserId(event.getUserId());
             notification.setMessage(message);
+            notification.setTitle(title);
             notification.setType(type);
             notification.setCreatedAt(LocalDateTime.now());
             notification.setBudgetId(event.getBudgetId());
@@ -2252,7 +2285,7 @@ public class NotificationService {
 
         DeliveryPlan plan = new DeliveryPlan();
         plan.message = message;
-        plan.title = resolveTitle(type, params);
+        plan.title = title;
         plan.redirectUrl = redirectUrl;
         plan.actionType = actionType;
         plan.androidExternalUrl = androidExternalUrl;
@@ -2621,7 +2654,9 @@ public class NotificationService {
                     continue;
                 }
                 try {
-                    String title = getNotificationTitle(n.getType());
+                    String title = n.getTitle() != null && !n.getTitle().isBlank()
+                            ? n.getTitle()
+                            : getNotificationTitle(n.getType());
                     for (AuthSessionService.PushTarget target : pushTargets) {
                         sendFCMMessage(target.token(), title, n.getMessage(), n.getActionType(),
                                 n.getRedirectUrl(), n.getType(), userId, n.getBudgetId(),

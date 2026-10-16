@@ -80,6 +80,7 @@ public class ReconciliationService {
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final ObjectProvider<ReconciliationService> selfProvider;
     private final ObjectMapper objectMapper;
+    private final RevenueClassificationService revenueClassificationService;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     @Value("${moniewise.reconciliation.auto-heal-max:50000}")
@@ -102,7 +103,8 @@ public class ReconciliationService {
             WalletService walletService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
             ObjectProvider<ReconciliationService> selfProvider,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            RevenueClassificationService revenueClassificationService
     ) {
         this.reconciliationRunRepository = reconciliationRunRepository;
         this.reconciliationItemRepository = reconciliationItemRepository;
@@ -118,6 +120,7 @@ public class ReconciliationService {
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.selfProvider = selfProvider;
         this.objectMapper = objectMapper;
+        this.revenueClassificationService = revenueClassificationService;
     }
 
     @EventListener(ContextClosedEvent.class)
@@ -139,118 +142,71 @@ public class ReconciliationService {
     }
 
     /**
-     * Reconciles the platform revenue wallet against its BaaS provider balance.
-     *
-     * <p>Historically this method compared {@code wallet.balance == provider.balance} on the
-     * revenue wallet and flagged any drift. That check is intentionally disabled: the Rubies
-     * revenue account holds mixed inflows — real revenue (markup fees, withdrawal fees) AND
-     * VAS operating float (money collected from users' envelopes to pay airtime/data providers
-     * from Wisemonie's Rubies account). Since VAS provider payouts are not currently tracked
-     * internally, {@code provider.balance} will always exceed {@code wallet.balance} by the
-     * outstanding VAS float, and every daily run would produce a false mismatch that drowns
-     * out real issues in the reconciliation report.
-     *
-     * <p>Once VAS payouts are tracked (or VAS float is split into its own Rubies account),
-     * restore the comparison using
-     * {@code expected_baas = wallet.balance + (vas_collected − vas_paid_out)}.
-     *
-     * <p>The method is kept for scheduler compatibility and reports a null-op summary with
-     * a diagnostic note so ops sees the wallet was intentionally skipped and knows the
-     * current inflows for eyeball tracking.
-     */
-    /**
-     * Reconciles the platform revenue wallet against its BaaS provider balance.
-     *
-     * <p>Historically this method compared {@code wallet.balance == provider.balance} on the
-     * revenue wallet and flagged any drift. That check is intentionally disabled: the Rubies
-     * revenue account holds mixed inflows — real revenue (markup fees, withdrawal fees) AND
-     * VAS operating float (money collected from users' envelopes to pay airtime/data providers
-     * from Wisemonie's Rubies account). Since VAS provider payouts are not currently tracked
-     * internally, {@code provider.balance} will always exceed {@code wallet.balance} by the
-     * outstanding VAS float, and every daily run would produce a false mismatch that drowns
-     * out real issues in the reconciliation report.
-     *
-     * <p>Once VAS payouts are tracked (or VAS float is split into its own Rubies account),
-     * restore the comparison using
-     * {@code expected_baas = wallet.balance + (vas_collected − vas_paid_out)}.
-     *
-     * <p>The method is kept for scheduler compatibility and reports a null-op summary with
-     * a diagnostic note so ops sees the wallet was intentionally skipped.
+     * Classifies the revenue account and compares that picture with Rubies.
+     * Expected Rubies = database revenue + PayeeLord cost still in the account
+     * + markup not yet added to the revenue balance − wallet-opening fees with
+     * no book entry. The method does not change a balance.
      */
     @Transactional
     public Map<String, Object> reconcileWalletBalances(Long runId) {
         getRunOrThrow(runId);
-
-        BigDecimal revenueWalletBalance = walletRepository.findByRevenueWalletTrue()
-                .map(w -> w.getBalance() != null ? w.getBalance() : BigDecimal.ZERO)
-                .orElse(BigDecimal.ZERO);
-
-        logger.info("[Recon] Revenue-wallet comparison SKIPPED (mixed revenue + VAS float). " +
-                "internalRevenueBalance={}", revenueWalletBalance);
-
+        Map<String, Object> bankReport = reconcileRevenueWallet();
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("scope", "walletBalances");
-        summary.put("checked", 0);
-        summary.put("mismatches", 0);
-        summary.put("note", "Revenue-wallet BaaS comparison intentionally disabled — account " +
-                "holds mixed revenue and VAS operating float. Track VAS payouts to restore.");
-        summary.put("internalRevenueBalance", revenueWalletBalance);
+        summary.put("checked", 1);
+        summary.put("mismatches", RevenuePosition.STATUS_MISMATCH.equals(bankReport.get("status")) ? 1 : 0);
+        summary.putAll(bankReport);
+        logger.info("[Recon] Revenue position — status={} cost={} unexplained={}",
+                bankReport.get("status"),
+                bankReport.get("payeelordCostOutstanding"),
+                bankReport.get("unexplained"));
         return summary;
     }
 
     /**
-     * Compares the revenue wallet's DB balance against its Rubies BaaS balance.
-     * Logs a warning when a gap is detected, recording the difference for review.
+     * Compares the classified revenue position with the live Rubies balance.
+     * When Rubies cannot be read, the books are still returned.
      */
     public Map<String, Object> reconcileRevenueWallet() {
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("scope", "revenueWalletBaaSCheck");
 
-        Wallet revenueWallet = walletRepository.findByUserId(revenueWalletUserId).orElse(null);
+        Wallet revenueWallet = walletRepository.findByRevenueWalletTrue()
+                .orElseGet(() -> walletRepository.findByUserId(revenueWalletUserId).orElse(null));
         if (revenueWallet == null) {
             report.put("status", "NO_WALLET");
-            report.put("message", "Revenue wallet not found for user-id " + revenueWalletUserId);
+            report.put("message", "Revenue wallet not found.");
             return report;
         }
 
         PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(revenueWallet);
         String providerRef = firstNonBlank(
                 revenueWallet.getProviderWalletRef(), revenueWallet.getSubWalletRef());
+        report.put("providerRef", providerRef);
 
         if (providerRef == null) {
+            report.putAll(revenueClassificationService.explain(null).toMap());
             report.put("status", "NO_PROVIDER_REF");
-            report.put("message", "Revenue wallet has no provider reference — cannot query BaaS.");
+            report.put("message", "Revenue wallet has no provider reference, so the Rubies balance was not read. "
+                    + report.get("message"));
             return report;
         }
 
         Optional<BigDecimal> baasBalance = gateway.fetchWalletBalance(providerRef);
         if (baasBalance.isEmpty()) {
+            report.putAll(revenueClassificationService.explain(null).toMap());
             report.put("status", "PROVIDER_UNREACHABLE");
-            report.put("message", "Could not fetch BaaS balance for revenue wallet (" + providerRef + ")");
+            report.put("message", "Could not fetch the Rubies balance for " + providerRef + ". "
+                    + report.get("message"));
             return report;
         }
 
-        BigDecimal dbBalance = revenueWallet.getBalance() != null
-                ? revenueWallet.getBalance() : BigDecimal.ZERO;
-        BigDecimal difference = dbBalance.subtract(baasBalance.get());
-        BigDecimal gap = difference.abs();
-
-        report.put("dbBalance", dbBalance);
-        report.put("baasBalance", baasBalance.get());
-        report.put("difference", difference);
-        report.put("providerRef", providerRef);
-
-        if (gap.compareTo(HOLDINGS_TOLERANCE) <= 0) {
-            report.put("status", "OK");
-            logger.info("[Recon] Revenue wallet OK — DB={}, BaaS={}", dbBalance, baasBalance.get());
+        RevenuePosition.Result position = revenueClassificationService.explain(baasBalance.get());
+        report.putAll(position.toMap());
+        if (RevenuePosition.STATUS_MISMATCH.equals(position.status())) {
+            logger.warn("[Recon] REVENUE WALLET MISMATCH — {}", position.message());
         } else {
-            report.put("status", "MISMATCH");
-            report.put("message", String.format(
-                    "Revenue wallet gap detected: DB=₦%s, BaaS=₦%s, difference=₦%s. " +
-                    "Likely unrecorded BaaS fees (KYC/BVN, NIP charges).",
-                    dbBalance, baasBalance.get(), difference));
-            logger.warn("[Recon] REVENUE WALLET MISMATCH — DB={}, BaaS={}, gap={}",
-                    dbBalance, baasBalance.get(), difference);
+            logger.info("[Recon] Revenue wallet {} — {}", position.status(), position.message());
         }
         return report;
     }

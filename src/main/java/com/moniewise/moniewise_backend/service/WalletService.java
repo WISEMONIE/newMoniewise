@@ -79,6 +79,7 @@ public class WalletService {
     private final RedisTemplate<String, String> redisTemplate;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final FeeReserveService feeReserveService;
+    private final RevenueClassificationService revenueClassificationService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -122,7 +123,8 @@ public class WalletService {
             SystemConfigService systemConfigService,
             RedisTemplate<String, String> redisTemplate,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
-            @Lazy FeeReserveService feeReserveService) {
+            @Lazy FeeReserveService feeReserveService,
+            RevenueClassificationService revenueClassificationService) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
@@ -142,6 +144,7 @@ public class WalletService {
         this.redisTemplate = redisTemplate;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.feeReserveService = feeReserveService;
+        this.revenueClassificationService = revenueClassificationService;
     }
 
     /**
@@ -547,7 +550,28 @@ public class WalletService {
         }
         wallet.setProviderMetadata(providerMetadata);
 
-        return walletRepository.save(wallet);
+        Wallet created = walletRepository.save(wallet);
+        recordRubiesWalletOpeningFee(user, created);
+        return created;
+    }
+
+    /**
+     * Rubies takes the opening fee from the revenue account when this wallet
+     * is created. The books follow that debit once, after the account exists.
+     */
+    private void recordRubiesWalletOpeningFee(User user, Wallet wallet) {
+        if (user == null || user.getId() == null || wallet == null || wallet.isRevenueWallet()) {
+            return;
+        }
+        if (wallet.getAccountNumber() == null || wallet.getAccountNumber().isBlank()) {
+            return;
+        }
+        boolean rubies = RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())
+                || "Rubies MFB".equalsIgnoreCase(wallet.getBankName());
+        if (!rubies) {
+            return;
+        }
+        revenueClassificationService.recordWalletOpeningFee(user.getId(), wallet.getAccountNumber());
     }
 
     @Transactional
@@ -2005,7 +2029,7 @@ public class WalletService {
             String originalRef,
             Long userId) {
         collectRubiesToRevenueAsync(feeAmount, fromWalletRef, fromWalletName, originalRef, userId,
-                TransactionType.MARKUP_FEE_COLLECTION, "Markup fee");
+                TransactionType.MARKUP_FEE_COLLECTION, "Markup fee", null, null);
     }
 
     /**
@@ -2020,9 +2044,11 @@ public class WalletService {
             String fromWalletRef,
             String fromWalletName,
             String originalRef,
-            Long userId) {
+            Long userId,
+            BigDecimal costAmount,
+            BigDecimal marginAmount) {
         collectRubiesToRevenueAsync(amount, fromWalletRef, fromWalletName, originalRef, userId,
-                TransactionType.VAS_PAYMENT_COLLECTION, "Airtime/Data payment");
+                TransactionType.VAS_PAYMENT_COLLECTION, "Airtime/Data payment", costAmount, marginAmount);
     }
 
     /**
@@ -2038,7 +2064,7 @@ public class WalletService {
             String originalRef,
             Long userId) {
         collectRubiesToRevenueAsync(feeAmount, fromWalletRef, fromWalletName, originalRef, userId,
-                TransactionType.BUDGET_FEE_COLLECTION, "Budget creation fee");
+                TransactionType.BUDGET_FEE_COLLECTION, "Budget creation fee", null, null);
     }
 
     /**
@@ -2053,7 +2079,9 @@ public class WalletService {
             String originalRef,
             Long userId,
             TransactionType txnType,
-            String label) {
+            String label,
+            BigDecimal vasCost,
+            BigDecimal vasMargin) {
 
         if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (fromWalletRef == null || fromWalletRef.isBlank()) return;
@@ -2142,6 +2170,7 @@ public class WalletService {
             try {
                 TransactionLog existing = transactionLogRepository.findByReference(revRef).orElse(null);
                 if (existing != null && existing.getStatus() == TransactionStatus.COMPLETED) {
+                    bookVasSplitAfterCollection(txnType, revUserId, originalRef, feeAmount, vasCost, vasMargin);
                     logger.info("[Rubies-Fee] Fee already collected for ref={} — skipping duplicate attempt.", revRef);
                     return;
                 }
@@ -2212,11 +2241,14 @@ public class WalletService {
                     transactionLogRepository.save(log);
                 });
 
-                // ── 4. Credit revenue wallet now that the money actually moved ───
-                // VAS payments move the full selling amount (cost + margin); VAS
-                // margin revenue is tracked separately by logVasMarkupRevenue().
-                // Only markup-fee and budget-fee collections credit the revenue wallet.
-                if (txnType != TransactionType.VAS_PAYMENT_COLLECTION) {
+                // ── 4. Book the money that actually arrived ──────────────────────
+                // Airtime/data: the full selling amount is now in the Rubies
+                // account. Cost becomes a PayeeLord payable. Only the margin
+                // is added to the revenue wallet. Fee collections still credit
+                // the revenue wallet with the whole fee.
+                if (txnType == TransactionType.VAS_PAYMENT_COLLECTION) {
+                    bookVasSplitAfterCollection(txnType, revUserId, originalRef, feeAmount, vasCost, vasMargin);
+                } else {
                     try {
                         // Guard: skip if a RevenueLog for this reference already exists
                         // (covers historical transactions credited under the old optimistic path).
@@ -2266,6 +2298,30 @@ public class WalletService {
                         feeAmount, revRef, e.getMessage());
             }
         });
+    }
+
+    /**
+     * Books cost and margin after a VAS collection has completed. Safe to call
+     * again: a purchase already credited is left as it is. A failed Rubies
+     * transfer never reaches this method, so a purchase that did not land in
+     * the revenue account is not treated as revenue or as PayeeLord cost.
+     */
+    private void bookVasSplitAfterCollection(TransactionType txnType,
+                                             Long userId,
+                                             String originalRef,
+                                             BigDecimal sellingAmount,
+                                             BigDecimal costAmount,
+                                             BigDecimal marginAmount) {
+        if (txnType != TransactionType.VAS_PAYMENT_COLLECTION) {
+            return;
+        }
+        try {
+            revenueClassificationService.bookCompletedVasCollection(
+                    userId, originalRef, sellingAmount, costAmount, marginAmount);
+        } catch (RuntimeException ex) {
+            logger.error("[Rubies-Fee] VAS collected but the revenue/cost split was not booked for ref={}: {}",
+                    originalRef, ex.getMessage());
+        }
     }
 
     /**

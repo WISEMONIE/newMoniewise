@@ -27,6 +27,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -68,6 +69,8 @@ public class BudgetLifeCycleManager {
     private final WalletService walletService;
     private final NotificationService notificationService;
     private final TransactionTemplate transactionTemplate;
+    /** Savepoint around a sweep so a failed move does not roll back the budget start. */
+    private final TransactionTemplate nestedTransactionTemplate;
     private final NotificationRepository notificationRepository;
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeService envelopeService;
@@ -113,6 +116,8 @@ public class BudgetLifeCycleManager {
         this.walletService = walletService;
         this.notificationService = notificationService;
         this.transactionTemplate = transactionTemplate;
+        this.nestedTransactionTemplate = new TransactionTemplate(transactionTemplate.getTransactionManager());
+        this.nestedTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
         this.notificationRepository = notificationRepository;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
         this.envelopeService = envelopeService;
@@ -314,10 +319,11 @@ public class BudgetLifeCycleManager {
         List<Envelope> envelopesToSave = new ArrayList<>();
         List<ScheduledTask> tasksToSave = new ArrayList<>();
         List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
+        List<String> sweepNotes = new ArrayList<>();
 
         for (Envelope envelope : envelopes) {
             scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
-            activateScheduledEnvelope(budget, envelope, now, tasksToSave, outboxEventsToSave);
+            activateScheduledEnvelope(budget, envelope, now, tasksToSave, outboxEventsToSave, sweepNotes);
             envelopesToSave.add(envelope);
         }
 
@@ -337,6 +343,11 @@ public class BudgetLifeCycleManager {
         Map<String, Object> payload = new HashMap<>();
         payload.put("budgetName", budget.getName() != null ? budget.getName() : "your");
         payload.put("startDate", budget.getStartDate() != null ? budget.getStartDate().toString() : today.toString());
+        if (!sweepNotes.isEmpty()) {
+            String budgetName = budget.getName() != null ? budget.getName() : "your";
+            payload.put("__message", "Your scheduled budget '" + budgetName + "' is now active. "
+                    + String.join(" ", sweepNotes));
+        }
         outboxEventsToSave.add(buildOutboxEvent(
                 NotificationType.BUDGET_ACTIVATED,
                 budget.getUser().getId(),
@@ -359,13 +370,14 @@ public class BudgetLifeCycleManager {
             Envelope envelope,
             LocalDateTime now,
             List<ScheduledTask> tasksToSave,
-            List<OutboxEvent> outboxEventsToSave
+            List<OutboxEvent> outboxEventsToSave,
+            List<String> sweepNotes
     ) {
         Map<String, Object> conditions = mutableConditions(envelope);
         String type = conditions.getOrDefault("type", "").toString().toLowerCase();
 
         if ("savings_sweep".equals(type)) {
-            activateScheduledSavingsSweep(budget, envelope, conditions, now, outboxEventsToSave);
+            activateScheduledSavingsSweep(budget, envelope, conditions, now, sweepNotes);
             return;
         }
 
@@ -428,7 +440,7 @@ public class BudgetLifeCycleManager {
             Envelope envelope,
             Map<String, Object> conditions,
             LocalDateTime now,
-            List<OutboxEvent> outboxEventsToSave
+            List<String> sweepNotes
     ) {
         BigDecimal amount = availableVaultBalance(envelope);
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
@@ -443,19 +455,24 @@ public class BudgetLifeCycleManager {
         Long targetSavingsGoalId = parseLong(conditions.get("targetSavingsGoalId"));
         String skipReason = savingsSweepSkipReason(targetSavingsGoalId, budget.getUser().getId(), now.toLocalDate());
         if (skipReason != null) {
-            markScheduledSavingsSweepSkipped(budget, envelope, conditions, amount, skipReason, outboxEventsToSave);
+            markScheduledSavingsSweepSkipped(budget, envelope, conditions, amount, skipReason, targetSavingsGoalId, sweepNotes);
             return;
         }
 
         try {
-            savingsService.sweepEnvelopeToSavings(
-                    budget.getUser().getId(),
-                    targetSavingsGoalId,
-                    amount,
-                    envelope.getName(),
-                    budget.getId(),
-                    envelope.getId()
-            );
+            // The sweep joins this savepoint. If it throws, only the move rolls back.
+            // The budget can still start, and the money stays in the envelope.
+            nestedTransactionTemplate.execute(status -> {
+                savingsService.sweepEnvelopeToSavings(
+                        budget.getUser().getId(),
+                        targetSavingsGoalId,
+                        amount,
+                        envelope.getName(),
+                        budget.getId(),
+                        envelope.getId()
+                );
+                return null;
+            });
 
             conditions.put("savingsSweepStatus", "COMPLETED");
             conditions.remove("savingsSweepFailureReason");
@@ -472,8 +489,9 @@ public class BudgetLifeCycleManager {
                     envelope,
                     conditions,
                     amount,
-                    "we could not move it to the selected savings pot",
-                    outboxEventsToSave
+                    "we could not move the money",
+                    targetSavingsGoalId,
+                    sweepNotes
             );
         }
     }
@@ -484,7 +502,8 @@ public class BudgetLifeCycleManager {
             Map<String, Object> conditions,
             BigDecimal amount,
             String reason,
-            List<OutboxEvent> outboxEventsToSave
+            Long targetSavingsGoalId,
+            List<String> sweepNotes
     ) {
         conditions.put("savingsSweepStatus", "SKIPPED");
         conditions.put("savingsSweepFailureReason", reason);
@@ -494,45 +513,36 @@ public class BudgetLifeCycleManager {
         envelope.setNextDisbursementAt(null);
         envelope.setHasMatured(false);
 
-        Map<String, Object> payload = new HashMap<>();
-        String envelopeName = envelope.getName() != null ? envelope.getName() : "Savings";
-        String budgetName = budget.getName() != null ? budget.getName() : "your";
-        payload.put("budgetName", budgetName);
-        payload.put("envelopeName", envelopeName);
-        payload.put("amount", String.format("%,.2f", amount));
-        payload.put("reason", reason);
-        payload.put("__message", "Your '" + budgetName + "' budget is active, but '" + envelopeName
-                + "' was not moved to savings because " + reason
-                + ". The money is still protected in that envelope.");
-
-        outboxEventsToSave.add(buildOutboxEvent(
-                NotificationType.BUDGET_UPDATED,
-                budget.getUser().getId(),
-                budget.getId(),
-                envelope.getId(),
-                payload
-        ));
+        String envelopeName = envelope.getName() != null ? envelope.getName() : "This envelope";
+        String eventName = "that event";
+        if (targetSavingsGoalId != null) {
+            eventName = savingsGoalRepository.findById(targetSavingsGoalId)
+                    .map(goal -> goal.getName() != null && !goal.getName().isBlank() ? goal.getName() : "that event")
+                    .orElse("that event");
+        }
+        sweepNotes.add("'" + envelopeName + "' was not moved into '" + eventName + "' because " + reason
+                + ". ₦" + String.format("%,.2f", amount) + " is still in the envelope.");
     }
 
     private String savingsSweepSkipReason(Long savingsGoalId, Long userId, LocalDate today) {
         if (savingsGoalId == null) {
-            return "no savings pot was selected";
+            return "no event was selected";
         }
 
         Optional<SavingsGoal> goalOpt = savingsGoalRepository.findByIdForUpdate(savingsGoalId);
         if (goalOpt.isEmpty()) {
-            return "the selected savings pot could not be found";
+            return "that event could not be found";
         }
 
         SavingsGoal goal = goalOpt.get();
         if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(userId)) {
-            return "the selected savings pot no longer belongs to this account";
+            return "that event is not on this account";
         }
         if (goal.getStatus() != SavingsStatus.ACTIVE) {
-            return "the selected savings pot is no longer active";
+            return "that event has already ended";
         }
         if (goal.getMaturityDate() == null || !today.isBefore(goal.getMaturityDate())) {
-            return "the selected savings pot has already matured";
+            return "that event has already ended";
         }
 
         return null;

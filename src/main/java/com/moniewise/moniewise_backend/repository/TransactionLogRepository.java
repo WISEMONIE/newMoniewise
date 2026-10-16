@@ -110,6 +110,8 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     boolean existsByReference(String transactionReference);
 
+    boolean existsByReferenceStartingWith(String referencePrefix);
+
     boolean existsByUserIdAndTransactionTypeInAndStatusIn(
             Long userId,
             Set<TransactionType> transactionTypes,

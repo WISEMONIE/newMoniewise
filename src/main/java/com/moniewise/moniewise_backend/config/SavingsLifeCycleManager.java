@@ -9,22 +9,20 @@ import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.SavingsCacheService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 @Component
 public class SavingsLifeCycleManager {
@@ -32,137 +30,240 @@ public class SavingsLifeCycleManager {
     private static final Logger logger = LoggerFactory.getLogger(SavingsLifeCycleManager.class);
 
     private static final ZoneId LAGOS = ZoneId.of("Africa/Lagos");
+    private static final int MORNING_HOUR = 7;
+    private static final int PAGE_SIZE = 100;
 
     private final SavingsGoalRepository savingsGoalRepository;
     private final NotificationService notificationService;
     private final SavingsCacheService savingsCacheService;
     private final BadgeAwardService badgeAwardService;
+    private final TransactionTemplate transactionTemplate;
 
     public SavingsLifeCycleManager(SavingsGoalRepository savingsGoalRepository,
                                    NotificationService notificationService,
                                    SavingsCacheService savingsCacheService,
-                                   BadgeAwardService badgeAwardService) {
+                                   BadgeAwardService badgeAwardService,
+                                   TransactionTemplate transactionTemplate) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.notificationService = notificationService;
         this.savingsCacheService = savingsCacheService;
         this.badgeAwardService = badgeAwardService;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
-     * Runs every 4 hours (not once at 1AM): if the instance was asleep or
-     * restarting when a run was due — common on hosted platforms — the next
-     * run a few hours later self-heals the day. Per-goal idempotency via
-     * {@link SavingsGoal#getLastProcessedDate()} guarantees interest is still
-     * applied at most once per calendar day (Africa/Lagos).
+     * Runs every 4 hours in Africa/Lagos. Each event is locked and saved in its
+     * own short transaction, so a rename or a later day committed alongside this
+     * pass is not written back to the old values. Interest still applies at most
+     * once per Lagos day. Reminder switches are read on every pass, so turning
+     * one on after midnight still sends inside the same day.
      */
-    @Scheduled(cron = "0 0 */4 * * *")
-    @Transactional
+    @Scheduled(cron = "0 0 */4 * * *", zone = "Africa/Lagos")
     public void processDailySavings() {
         logger.info("🌤️ Waking up Savings Engine: Calculating interest & checking maturities...");
 
         LocalDate today = LocalDate.now(LAGOS);
-        int pageNumber = 0;
-        int pageSize = 100; // Process 100 pots at a time to save RAM
-        Page<SavingsGoal> page;
-        Set<Long> changedUserIds = new HashSet<>();
-
-        do {
-            Pageable pageable = PageRequest.of(pageNumber, pageSize);
-            page = savingsGoalRepository.findByStatus(SavingsStatus.ACTIVE, pageable);
-            List<SavingsGoal> activeGoals = page.getContent();
-
-            for (SavingsGoal goal : activeGoals) {
+        long afterId = 0L;
+        while (true) {
+            List<Long> ids = savingsGoalRepository.findIdsByStatusAfter(
+                    SavingsStatus.ACTIVE, afterId, PageRequest.of(0, PAGE_SIZE));
+            if (ids.isEmpty()) {
+                break;
+            }
+            for (Long id : ids) {
                 try {
-                    // Idempotency guard — this goal already got its daily pass.
-                    if (goal.getLastProcessedDate() != null
-                            && !goal.getLastProcessedDate().isBefore(today)) {
-                        continue;
-                    }
-
-                    // ==========================================
-                    // 1. THE WEALTH BUILDER (Calculate Daily Interest)
-                    // ==========================================
-                    if (goal.getInterestRate().compareTo(BigDecimal.ZERO) > 0 && goal.getCurrentBalance().compareTo(BigDecimal.ZERO) > 0) {
-
-                        // Formula: (Balance * (Rate / 100)) / 365
-                        BigDecimal annualInterest = goal.getCurrentBalance()
-                                .multiply(goal.getInterestRate())
-                                .divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
-
-                        BigDecimal dailyInterest = annualInterest.divide(new BigDecimal("365"), 6, RoundingMode.HALF_UP);
-
-                        // Add it to their accrued interest pot
-                        goal.setAccruedInterest(goal.getAccruedInterest().add(dailyInterest));
-                    }
-
-                    long daysUntilMaturity = ChronoUnit.DAYS.between(today, goal.getMaturityDate());
-
-                    // ==========================================
-                    // 1.5 THE HEADS-UP CALLS (7 days + 1 day to maturity)
-                    // Email AND push for both — the push was missing entirely.
-                    // ==========================================
-                    if (!goal.isMaturityReminderSent()
-                            && daysUntilMaturity > 1 && daysUntilMaturity <= 7) {
-                        sendMaturingSoonEmail(goal, daysUntilMaturity);
-                        sendMaturingSoonPush(goal, daysUntilMaturity);
-                        goal.setMaturityReminderSent(true);
-                    }
-
-                    if (!goal.isMaturityEveReminderSent() && daysUntilMaturity == 1) {
-                        sendMaturingSoonEmail(goal, 1);
-                        sendMaturingSoonPush(goal, 1);
-                        goal.setMaturityEveReminderSent(true);
-                        // A goal created <2 days before maturity skips the 7-day window;
-                        // close that flag too so nothing tries to send it after the fact.
-                        goal.setMaturityReminderSent(true);
-                    }
-
-                    // ==========================================
-                    // 2. THE ALARM CLOCK (Check for Maturity)
-                    // ==========================================
-                    if (!today.isBefore(goal.getMaturityDate())) { // If today is >= maturity date
-                        matureGoal(goal);
-                    }
-
-                    goal.setLastProcessedDate(today);
-                    savingsGoalRepository.save(goal);
-                    changedUserIds.add(goal.getUser().getId());
-
+                    transactionTemplate.execute(status -> {
+                        processOneGoal(id, today);
+                        return null;
+                    });
                 } catch (Exception e) {
-                    // We catch inside the loop so one bad pot doesn't crash the whole batch
-                    logger.error("❌ Failed to process Savings Goal ID: {}", goal.getId(), e);
+                    logger.error("❌ Failed to process Savings Goal ID: {}", id, e);
                 }
             }
+            afterId = ids.get(ids.size() - 1);
+        }
 
-            pageNumber++;
-        } while (page.hasNext());
-
-        savingsCacheService.evictUsersSavingsCachesAfterCommit(changedUserIds);
+        if (ZonedDateTime.now(LAGOS).getHour() >= MORNING_HOUR) {
+            sendDueMorningReminders();
+        }
 
         logger.info("💤 Savings Engine finished daily processing.");
     }
 
+    /** 07:00 Africa/Lagos. Sends the unlock-day push that was held back overnight. */
+    @Scheduled(cron = "0 0 7 * * *", zone = "Africa/Lagos")
+    public void morningReminderClock() {
+        sendDueMorningReminders();
+    }
+
+    private void processOneGoal(Long goalId, LocalDate today) {
+        SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(goalId).orElse(null);
+        if (goal == null || goal.getStatus() != SavingsStatus.ACTIVE || goal.getMaturityDate() == null) {
+            return;
+        }
+
+        boolean alreadyProcessedToday = goal.getLastProcessedDate() != null
+                && !goal.getLastProcessedDate().isBefore(today);
+        if (!alreadyProcessedToday) {
+            applyDailyInterest(goal);
+            goal.setLastProcessedDate(today);
+        }
+
+        long daysUntilMaturity = ChronoUnit.DAYS.between(today, goal.getMaturityDate());
+        boolean createdToday = goal.getStartDate() != null && !today.isAfter(goal.getStartDate());
+
+        if (goal.isRemindWeek()
+                && PrepReminderSchedule.due(daysUntilMaturity, today, goal.getStartDate(), goal.getLastPrepReminderDate())
+                && sendPrepPush(goal, daysUntilMaturity)) {
+            goal.setLastPrepReminderDate(today);
+        }
+
+        // The last-week email is its own once-only note. It does not wait for
+        // the repeating push, so a push that landed on day 8 cannot skip it.
+        if (!createdToday
+                && goal.isRemindWeek()
+                && daysUntilMaturity > 1
+                && daysUntilMaturity <= 7
+                && !goal.isMaturityReminderSent()) {
+            sendMaturingSoonEmail(goal, daysUntilMaturity);
+            goal.setMaturityReminderSent(true);
+        }
+
+        if (!createdToday
+                && goal.isRemindDayBefore()
+                && !goal.isMaturityEveReminderSent()
+                && daysUntilMaturity == 1
+                && sendMaturingSoonPush(goal)) {
+            sendMaturingSoonEmail(goal, 1);
+            goal.setMaturityEveReminderSent(true);
+            goal.setMaturityReminderSent(true);
+        }
+
+        if (!today.isBefore(goal.getMaturityDate())) {
+            applyMaturity(goal);
+        }
+
+        savingsGoalRepository.save(goal);
+        if (goal.getUser() != null && goal.getUser().getId() != null) {
+            savingsCacheService.evictUserSavingsCachesAfterCommit(goal.getUser().getId());
+        }
+    }
+
+    private void applyDailyInterest(SavingsGoal goal) {
+        if (goal.getInterestRate() == null || goal.getCurrentBalance() == null || goal.getAccruedInterest() == null) {
+            return;
+        }
+        if (goal.getInterestRate().compareTo(BigDecimal.ZERO) <= 0
+                || goal.getCurrentBalance().compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+        BigDecimal annualInterest = goal.getCurrentBalance()
+                .multiply(goal.getInterestRate())
+                .divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
+        BigDecimal dailyInterest = annualInterest.divide(new BigDecimal("365"), 6, RoundingMode.HALF_UP);
+        goal.setAccruedInterest(goal.getAccruedInterest().add(dailyInterest));
+    }
+
     /**
-     * Flips an ACTIVE goal to MATURED and fires the maturity comms (push + email),
-     * exactly once — the status flip is the guard. Called from the scheduled job
-     * above AND lazily from SavingsService when goals are fetched, so the withdraw
-     * UI never depends on the cron having run.
+     * Unlocks the event as soon as the day arrives. The ready push waits until
+     * 07:00 Lagos when the person asked for a morning reminder. The flag
+     * morningReminderSent is what stops a second ready push.
      */
     @Transactional
-    public void matureGoal(SavingsGoal goal) {
+    public void matureGoal(Long goalId) {
+        if (goalId == null) {
+            return;
+        }
+        SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(goalId).orElse(null);
+        if (goal == null || goal.getStatus() != SavingsStatus.ACTIVE || goal.getMaturityDate() == null) {
+            return;
+        }
+        if (LocalDate.now(LAGOS).isBefore(goal.getMaturityDate())) {
+            return;
+        }
+        applyMaturity(goal);
+        savingsGoalRepository.save(goal);
+        if (goal.getUser() != null && goal.getUser().getId() != null) {
+            savingsCacheService.evictUserSavingsCachesAfterCommit(goal.getUser().getId());
+        }
+    }
+
+    private void applyMaturity(SavingsGoal goal) {
         if (goal.getStatus() != SavingsStatus.ACTIVE) {
-            return; // already matured/withdrawn by another path
+            return;
         }
         goal.setStatus(SavingsStatus.MATURED);
-        savingsGoalRepository.save(goal);
-        savingsCacheService.evictUserSavingsCachesAfterCommit(goal.getUser().getId());
         badgeAwardService.awardSavingsMaturedBadgeAfterCommit(goal);
-
         logger.info("🎉 Savings Goal '{}' (ID: {}) for User {} has MATURED!",
-                goal.getName(), goal.getId(), goal.getUser().getId());
+                goal.getName(), goal.getId(), goal.getUser() != null ? goal.getUser().getId() : null);
 
-        sendMaturityNotification(goal);
+        if (!shouldSendMaturityNoticeNow(goal)) {
+            return;
+        }
+        deliverMaturityNotice(goal);
+    }
+
+    private boolean shouldSendMaturityNoticeNow(SavingsGoal goal) {
+        if (goal.isMorningReminderSent()) {
+            return false;
+        }
+        if (!goal.isRemindMorning()) {
+            return true;
+        }
+        ZonedDateTime now = ZonedDateTime.now(LAGOS);
+        if (goal.getMaturityDate() != null && now.toLocalDate().isEqual(goal.getMaturityDate())) {
+            return now.getHour() >= MORNING_HOUR;
+        }
+        return true;
+    }
+
+    private void deliverMaturityNotice(SavingsGoal goal) {
+        if (!sendMaturityNotification(goal)) {
+            return;
+        }
         sendMaturedEmail(goal);
+        goal.setMorningReminderSent(true);
+    }
+
+    private void sendDueMorningReminders() {
+        ZonedDateTime now = ZonedDateTime.now(LAGOS);
+        if (now.getHour() < MORNING_HOUR) {
+            return;
+        }
+        LocalDate today = now.toLocalDate();
+        long afterId = 0L;
+        while (true) {
+            List<Long> ids = savingsGoalRepository.findPendingMorningReminderIdsAfter(
+                    SavingsStatus.MATURED, afterId, PageRequest.of(0, PAGE_SIZE));
+            if (ids.isEmpty()) {
+                break;
+            }
+            for (Long id : ids) {
+                try {
+                    transactionTemplate.execute(status -> {
+                        sendMorningReminderIfDue(id, today);
+                        return null;
+                    });
+                } catch (Exception e) {
+                    logger.error("Failed to send morning reminder for Savings Goal ID: {}", id, e);
+                }
+            }
+            afterId = ids.get(ids.size() - 1);
+        }
+    }
+
+    private void sendMorningReminderIfDue(Long goalId, LocalDate today) {
+        SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(goalId).orElse(null);
+        if (goal == null
+                || goal.getStatus() != SavingsStatus.MATURED
+                || !goal.isRemindMorning()
+                || goal.isMorningReminderSent()
+                || goal.getMaturityDate() == null
+                || today.isBefore(goal.getMaturityDate())) {
+            return;
+        }
+        deliverMaturityNotice(goal);
+        savingsGoalRepository.save(goal);
     }
 
     /**
@@ -171,7 +272,8 @@ public class SavingsLifeCycleManager {
      */
     private void sendMaturingSoonEmail(SavingsGoal goal, long daysRemaining) {
         var user = goal.getUser();
-        if (user.getEmail() == null || user.getEmail().isBlank()) return;
+        if (user == null || user.getEmail() == null || user.getEmail().isBlank()) return;
+        if (goal.getCurrentBalance() == null || goal.getAccruedInterest() == null || goal.getMaturityDate() == null) return;
 
         String firstName = user.getName();
         if (firstName == null || firstName.isBlank()) {
@@ -197,23 +299,50 @@ public class SavingsLifeCycleManager {
                 goal.getName(), goal.getId(), user.getEmail(), daysRemaining);
     }
 
-    /** Push twin of the maturing-soon email (7-day and 1-day heads-ups). */
-    private void sendMaturingSoonPush(SavingsGoal goal, long daysRemaining) {
-        BigDecimal projectedPayout = goal.getCurrentBalance().add(goal.getAccruedInterest());
-        String maturityDateLabel = goal.getMaturityDate().format(DateTimeFormatter.ofPattern("d MMM yyyy"));
+    /**
+     * Repeating preparation push. The copy uses the days left today and asks
+     * the person to add money while the event is still ahead.
+     */
+    private boolean sendPrepPush(SavingsGoal goal, long daysRemaining) {
+        BigDecimal ready = readyAmount(goal);
+        BigDecimal target = goal.getTargetAmount() == null ? BigDecimal.ZERO : goal.getTargetAmount();
+        String money = naira(ready);
+        String message;
+        if (ready.compareTo(BigDecimal.ZERO) <= 0) {
+            message = String.format(
+                    "%d days to go. Nothing is set aside yet. Add toward it so the day is covered.",
+                    daysRemaining);
+        } else if (target.compareTo(BigDecimal.ZERO) > 0 && ready.compareTo(target) >= 0) {
+            message = String.format(
+                    "%d days to go. %s is set aside. It stays locked until the day.",
+                    daysRemaining, money);
+        } else {
+            message = String.format(
+                    "%d days to go. %s is set aside. Add more so you are ready.",
+                    daysRemaining, money);
+        }
+        return sendMaturingSoonNotice(goal, goal.getName(), message);
+    }
 
-        String message = daysRemaining == 1
-                ? String.format("⏳ '%s' matures tomorrow (%s). ₦%,.2f will be ready to withdraw.",
-                        goal.getName(), maturityDateLabel, projectedPayout)
-                : String.format("⏳ '%s' matures in %d days (%s). Projected payout: ₦%,.2f.",
-                        goal.getName(), daysRemaining, maturityDateLabel, projectedPayout);
+    /** The day before. Last chance to add money, then it unlocks. */
+    private boolean sendMaturingSoonPush(SavingsGoal goal) {
+        BigDecimal ready = readyAmount(goal);
+        String money = naira(ready);
+        String message = ready.compareTo(BigDecimal.ZERO) <= 0
+                ? "Nothing is set aside yet. Add toward it today. It unlocks tomorrow."
+                : money + " is set aside. Add anything you still need today. It unlocks tomorrow.";
+        return sendMaturingSoonNotice(goal, goal.getName() + " is tomorrow", message);
+    }
 
-        notificationService.sendNotification(
+    private boolean sendMaturingSoonNotice(SavingsGoal goal, String title, String message) {
+        if (goal.getUser() == null || goal.getUser().getId() == null) {
+            return false;
+        }
+        return notificationService.sendTitledNotification(
                 goal.getUser().getId().toString(),
+                title,
                 message,
                 NotificationType.SAVINGS_MATURING_SOON,
-                null,
-                null,
                 "VIEW_SAVINGS",
                 "/savings/" + goal.getId()
         );
@@ -225,7 +354,8 @@ public class SavingsLifeCycleManager {
      */
     private void sendMaturedEmail(SavingsGoal goal) {
         var user = goal.getUser();
-        if (user.getEmail() == null || user.getEmail().isBlank()) return;
+        if (user == null || user.getEmail() == null || user.getEmail().isBlank()) return;
+        if (goal.getCurrentBalance() == null || goal.getAccruedInterest() == null) return;
 
         String firstName = user.getName();
         if (firstName == null || firstName.isBlank()) {
@@ -250,23 +380,37 @@ public class SavingsLifeCycleManager {
      * GenericNotificationEvent publish was removed (it produced a second inbox row
      * and push for the same maturity).
      */
-    private void sendMaturityNotification(SavingsGoal goal) {
+    private boolean sendMaturityNotification(SavingsGoal goal) {
+        if (goal.getUser() == null || goal.getUser().getId() == null) {
+            return false;
+        }
         String userId = goal.getUser().getId().toString();
-        BigDecimal totalPayout = goal.getCurrentBalance().add(goal.getAccruedInterest());
+        String money = naira(readyAmount(goal));
+        boolean onTheDay = goal.getMaturityDate() != null
+                && LocalDate.now(LAGOS).isEqual(goal.getMaturityDate());
+        boolean morning = goal.isRemindMorning() && onTheDay;
+        String title = morning ? goal.getName() + " is today" : goal.getName();
+        String message = morning
+                ? money + " is ready. Move it to your wallet, a bank, or a friend."
+                : money + " is ready to take out.";
 
-        String message = String.format(
-                "🎉 Congratulations! Your '%s' savings plan has matured. ₦%,.2f is ready to be withdrawn!",
-                goal.getName(), totalPayout
-        );
-
-        notificationService.sendNotification(
+        return notificationService.sendTitledNotification(
                 userId,
+                title,
                 message,
                 NotificationType.SAVINGS_MATURED,
-                null,
-                null,
                 "VIEW_SAVINGS",
                 "/savings/" + goal.getId()
         );
+    }
+
+    private static BigDecimal readyAmount(SavingsGoal goal) {
+        BigDecimal balance = goal.getCurrentBalance() == null ? BigDecimal.ZERO : goal.getCurrentBalance();
+        BigDecimal interest = goal.getAccruedInterest() == null ? BigDecimal.ZERO : goal.getAccruedInterest();
+        return balance.add(interest);
+    }
+
+    private static String naira(BigDecimal amount) {
+        return String.format("₦%,.2f", amount == null ? BigDecimal.ZERO : amount);
     }
 }

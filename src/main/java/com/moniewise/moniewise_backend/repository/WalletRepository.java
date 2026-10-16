@@ -48,6 +48,31 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
 
     Optional<Wallet> findByRevenueWalletTrue();
 
+    /**
+     * Customer Rubies wallets whose opening fee was never written, either as
+     * WALLET-OPEN-{userId} or as the older KYC-BVN-{userId}- row.
+     */
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM wallets w
+            WHERE COALESCE(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND (
+                    upper(w.provider_name) = 'RUBIES'
+                 OR w.bank_name = 'Rubies MFB'
+              )
+              AND NOT EXISTS (
+                    SELECT 1 FROM transaction_logs t
+                    WHERE t.transaction_type IN ('kyc_bvn_fee', 'wallet_open_fee')
+                      AND (
+                            t.reference = 'WALLET-OPEN-' || w.user_id::text
+                         OR t.reference LIKE 'KYC-BVN-' || w.user_id::text || '-%'
+                      )
+              )
+            """, nativeQuery = true)
+    long countRubiesWalletsMissingOpeningFee();
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM Wallet w WHERE w.user.id = :userId")
     Optional<Wallet> findByUserIdForUpdate(@Param("userId") Long userId);

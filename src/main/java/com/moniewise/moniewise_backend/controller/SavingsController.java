@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.CreateSavingsGoalRequest;
+import com.moniewise.moniewise_backend.dto.request.UpdateSavingsGoalRequest;
 import com.moniewise.moniewise_backend.dto.request.FundSavingsRequest;
 import com.moniewise.moniewise_backend.dto.request.SavingsP2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawSavingsRequest;
@@ -59,14 +60,7 @@ public class SavingsController {
             User user = currentUser(principal.getName());
 
             // 2. Call the Wealth Engine
-            SavingsGoal createdGoal = savingsService.createSavingsGoal(
-                    user.getId(),
-                    request.getName(),
-                    request.getTargetAmount(),
-                    request.getInitialDeposit(),
-                    request.getMaturityDate(),
-                    request.getInterestRate()
-            );
+            SavingsGoal createdGoal = savingsService.createSavingsGoal(user.getId(), request);
 
             return new ResponseEntity<>(createdGoal, HttpStatus.CREATED);
 
@@ -77,6 +71,28 @@ public class SavingsController {
         } catch (Exception e) {
             logger.error("System error creating savings goal", e);
             return ResponseEntity.internalServerError().body("An error occurred while creating your savings goal.");
+        }
+    }
+
+    /**
+     * PATCH: Rename, change the amount, move the day later, or change reminders.
+     * A live event cannot be cancelled here.
+     */
+    @PatchMapping("/{id}")
+    public ResponseEntity<?> updateEvent(
+            @PathVariable("id") Long savingsGoalId,
+            @RequestBody UpdateSavingsGoalRequest request,
+            Principal principal) {
+        try {
+            User user = currentUser(principal.getName());
+            SavingsGoal updated = savingsService.updateEvent(user.getId(), savingsGoalId, request);
+            return ResponseEntity.ok(updated);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            logger.warn("Event update failed for {}: {}", principal.getName(), e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            logger.error("System error updating event", e);
+            return ResponseEntity.internalServerError().body("An error occurred while updating this event.");
         }
     }
 
