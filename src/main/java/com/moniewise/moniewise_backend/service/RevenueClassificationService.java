@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -124,8 +125,13 @@ public class RevenueClassificationService {
      * Rubies debits the revenue account when create-wallet succeeds. One row
      * per user. A BVN fee already recorded for that user is the same ₦70, so
      * it is not deducted again.
+     *
+     * <p>This must not join the wallet-creation transaction. Rubies has already
+     * opened the account before this runs. A failure here would mark that
+     * transaction rollback-only, and the wallet row would disappear while the
+     * bank account stayed open.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordWalletOpeningFee(Long userId, String accountNumber) {
         if (userId == null || walletOpeningFee.signum() <= 0) {
             return;

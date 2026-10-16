@@ -66,8 +66,8 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
                     SELECT 1 FROM transaction_logs t
                     WHERE t.transaction_type IN ('kyc_bvn_fee', 'wallet_open_fee')
                       AND (
-                            t.reference = 'WALLET-OPEN-' || w.user_id::text
-                         OR t.reference LIKE 'KYC-BVN-' || w.user_id::text || '-%'
+                            t.reference = 'WALLET-OPEN-' || CAST(w.user_id AS text)
+                         OR t.reference LIKE 'KYC-BVN-' || CAST(w.user_id AS text) || '-%'
                       )
               )
             """, nativeQuery = true)

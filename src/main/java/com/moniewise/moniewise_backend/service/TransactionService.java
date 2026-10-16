@@ -10,7 +10,10 @@ import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -26,6 +29,8 @@ import static com.moniewise.moniewise_backend.enums.TransactionType.*;
 @Service
 @Transactional(readOnly = true)
 public class TransactionService {
+
+    private static final Logger logger = LoggerFactory.getLogger(TransactionService.class);
 
     private final DecisionEngineService decisionEngineService;
     private final WalletService walletService;
@@ -198,24 +203,7 @@ public class TransactionService {
         Pageable pageable = PageRequest.of(page, boundedSize);
         Page<TransactionLog> transactionPage =
                 transactionLogRepo.findUserVisibleTransactions(userId, USER_VISIBLE_TYPES, pageable);
-
-        Set<Long> envelopeIds = new HashSet<>();
-        transactionPage.getContent().forEach(t -> {
-            if (t.getSourceEnvelopeId() != null) {
-                envelopeIds.add(t.getSourceEnvelopeId());
-            }
-            if (t.getTargetEnvelopeId() != null) {
-                envelopeIds.add(t.getTargetEnvelopeId());
-            }
-        });
-
-        Map<Long, String> envelopeNames = new HashMap<>();
-        if (!envelopeIds.isEmpty()) {
-            envelopeRepo.findAllById(envelopeIds)
-                    .forEach(envelope -> envelopeNames.put(envelope.getId(), envelope.getName()));
-        }
-
-        return transactionPage.map(t -> mapToListResponse(t, envelopeNames));
+        return toVisiblePage(userId, transactionPage, pageable);
     }
 
     /** Same shape as {@link #getTransactionsForUser}, scoped to one envelope (source or target). */
@@ -224,24 +212,54 @@ public class TransactionService {
         Pageable pageable = PageRequest.of(page, boundedSize);
         Page<TransactionLog> transactionPage =
                 transactionLogRepo.findByEnvelopeIdAndTransactionTypeIn(userId, envelopeId, USER_VISIBLE_TYPES, pageable);
+        return toVisiblePage(userId, transactionPage, pageable);
+    }
 
+    /**
+     * One bad row must not fail the whole page. If every row fails, the
+     * original error is thrown so the client keeps the list it already has.
+     */
+    private Page<TransactionListResponse> toVisiblePage(Long userId,
+                                                         Page<TransactionLog> transactionPage,
+                                                         Pageable pageable) {
         Set<Long> envelopeIds = new HashSet<>();
-        transactionPage.getContent().forEach(t -> {
-            if (t.getSourceEnvelopeId() != null) {
-                envelopeIds.add(t.getSourceEnvelopeId());
+        for (TransactionLog transaction : transactionPage.getContent()) {
+            if (transaction.getSourceEnvelopeId() != null) {
+                envelopeIds.add(transaction.getSourceEnvelopeId());
             }
-            if (t.getTargetEnvelopeId() != null) {
-                envelopeIds.add(t.getTargetEnvelopeId());
+            if (transaction.getTargetEnvelopeId() != null) {
+                envelopeIds.add(transaction.getTargetEnvelopeId());
             }
-        });
+        }
 
         Map<Long, String> envelopeNames = new HashMap<>();
         if (!envelopeIds.isEmpty()) {
-            envelopeRepo.findAllById(envelopeIds)
-                    .forEach(envelope -> envelopeNames.put(envelope.getId(), envelope.getName()));
+            try {
+                envelopeRepo.findAllById(envelopeIds)
+                        .forEach(envelope -> envelopeNames.put(envelope.getId(), envelope.getName()));
+            } catch (RuntimeException ex) {
+                logger.warn("Envelope names were not loaded for user {} transaction list ({})",
+                        userId, ex.getClass().getSimpleName());
+            }
         }
 
-        return transactionPage.map(t -> mapToListResponse(t, envelopeNames));
+        List<TransactionListResponse> rows = new ArrayList<>();
+        RuntimeException firstFailure = null;
+        for (TransactionLog transaction : transactionPage.getContent()) {
+            try {
+                rows.add(mapToListResponse(transaction, envelopeNames));
+            } catch (RuntimeException ex) {
+                if (firstFailure == null) {
+                    firstFailure = ex;
+                }
+                logger.warn("Transaction {} was left out of the list for user {} ({})",
+                        transaction.getId(), userId, ex.getClass().getSimpleName());
+            }
+        }
+        if (rows.isEmpty() && firstFailure != null) {
+            throw firstFailure;
+        }
+        return new PageImpl<>(rows, pageable, transactionPage.getTotalElements());
     }
 
     public TransactionDetailResponse getTransactionDetail(Long transactionId, Long userId) {
@@ -455,7 +473,10 @@ public class TransactionService {
             return userRepository.findById(transaction.getCounterpartyUserId())
                     .map(user -> {
                         if (user.getProfileData() != null && user.getProfileData().containsKey("name")) {
-                            return (String) user.getProfileData().get("name");
+                            Object rawName = user.getProfileData().get("name");
+                            if (rawName instanceof String name && !name.isBlank()) {
+                                return name;
+                            }
                         }
                         if (user.getEmail() != null) {
                             return user.getEmail().split("@")[0];
@@ -697,6 +718,9 @@ public class TransactionService {
     private boolean isOutgoing(TransactionType type, BigDecimal amount) {
         if (amount != null && amount.compareTo(BigDecimal.ZERO) < 0) {
             return true;
+        }
+        if (type == null) {
+            return false;
         }
         return switch (type) {
             case ENVELOPE_DISBURSEMENT,

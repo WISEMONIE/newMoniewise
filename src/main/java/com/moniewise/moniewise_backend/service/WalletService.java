@@ -571,7 +571,12 @@ public class WalletService {
         if (!rubies) {
             return;
         }
-        revenueClassificationService.recordWalletOpeningFee(user.getId(), wallet.getAccountNumber());
+        try {
+            revenueClassificationService.recordWalletOpeningFee(user.getId(), wallet.getAccountNumber());
+        } catch (RuntimeException ex) {
+            logger.error("[Revenue] Opening fee was not recorded for user {} after the wallet was created. The wallet is kept. ({})",
+                    user.getId(), ex.getClass().getSimpleName());
+        }
     }
 
     @Transactional
