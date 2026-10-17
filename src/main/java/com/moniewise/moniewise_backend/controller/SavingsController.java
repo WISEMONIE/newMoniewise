@@ -92,7 +92,7 @@ public class SavingsController {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
             logger.error("System error updating event", e);
-            return ResponseEntity.internalServerError().body("An error occurred while updating this event.");
+            return ResponseEntity.internalServerError().body("An error occurred while updating this savings.");
         }
     }
 

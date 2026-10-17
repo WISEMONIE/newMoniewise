@@ -364,24 +364,24 @@ public class BudgetService {
 
             Long targetSavingsGoalId = parseLong(conditions.get("targetSavingsGoalId"));
             if (targetSavingsGoalId == null) {
-                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' must select an event.");
+                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' must select a savings.");
             }
 
             SavingsGoal goal = savingsGoalRepository.findById(targetSavingsGoalId)
                     .orElseThrow(() -> new IllegalArgumentException(
-                            "'" + envelopeRequest.getName() + "' points to an event that no longer exists."));
+                            "'" + envelopeRequest.getName() + "' points to a savings that no longer exists."));
 
             if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(user.getId())) {
-                throw new SecurityException("'" + envelopeRequest.getName() + "' points to an event outside your account.");
+                throw new SecurityException("'" + envelopeRequest.getName() + "' points to a savings outside your account.");
             }
             if (goal.getStatus() != SavingsStatus.ACTIVE) {
-                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' cannot move money into an event that has ended.");
+                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' cannot move money into a savings that has ended.");
             }
             if (goal.getMaturityDate() == null || !request.getStartDate().isBefore(goal.getMaturityDate())) {
                 throw new IllegalArgumentException("'" + envelopeRequest.getName()
                         + "' cannot move money into '" + goal.getName()
-                        + "' because that event ends on " + goal.getMaturityDate()
-                        + ". Choose an event that ends after the budget starts, or remove the link.");
+                        + "' because that savings ends on " + goal.getMaturityDate()
+                        + ". Choose a savings that ends after the budget starts, or remove the link.");
             }
         }
     }

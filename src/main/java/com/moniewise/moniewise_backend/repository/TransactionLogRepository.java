@@ -180,6 +180,20 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     boolean existsByProviderNameAndProviderReference(String providerName, String providerReference);
 
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.createdAt >= :fromInclusive
+          AND t.createdAt < :toExclusive
+          AND t.transactionType IN :types
+          AND t.status = :status
+        ORDER BY t.createdAt ASC
+        """)
+    List<TransactionLog> findByTypesAndStatusBetween(
+            @Param("fromInclusive") LocalDateTime fromInclusive,
+            @Param("toExclusive") LocalDateTime toExclusive,
+            @Param("types") Set<TransactionType> types,
+            @Param("status") TransactionStatus status);
+
     /**
      * Finds an envelope external transfer (sourceEnvelopeId IS NOT NULL) by provider reference.
      *

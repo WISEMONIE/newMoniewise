@@ -144,22 +144,22 @@ public class SavingsService {
     @Transactional(rollbackFor = Exception.class)
     public SavingsGoal createSavingsGoal(Long userId, CreateSavingsGoalRequest request) {
         if (request == null) {
-            throw new IllegalArgumentException("Accept the event terms to continue.");
+            throw new IllegalArgumentException("Accept the savings terms to continue.");
         }
         boolean eventsRequest = isEventsRequest(request);
         EventCategory category = null;
         if (eventsRequest) {
             if (!Boolean.TRUE.equals(request.getTermsAccepted())) {
-                throw new IllegalArgumentException("Accept the event terms to continue.");
+                throw new IllegalArgumentException("Accept the savings terms to continue.");
             }
             category = EventCategory.parse(request.getCategory());
             if (category == null) {
-                throw new IllegalArgumentException("Choose what this event is.");
+                throw new IllegalArgumentException("Choose what this savings is.");
             }
         }
         String name = request.getName() == null ? "" : request.getName().trim();
         if (name.isEmpty()) {
-            throw new IllegalArgumentException("Enter an event name.");
+            throw new IllegalArgumentException("Enter a savings name.");
         }
         BigDecimal targetAmount = request.getTargetAmount();
         BigDecimal initialDeposit = request.getInitialDeposit();
@@ -171,7 +171,7 @@ public class SavingsService {
         // 1. Safety Check: an open event already uses this name. Closed ones do not.
         if (savingsGoalRepository.existsByUserIdAndNameIgnoreCaseAndStatusIn(
                 userId, name, OPEN_EVENT_STATUSES)) {
-            throw new IllegalArgumentException("You already have an event named '" + name + "'");
+            throw new IllegalArgumentException("You already have a savings named '" + name + "'");
         }
 
         // 2. Create the Pot. New events do not earn interest, whatever the request sends.
@@ -194,7 +194,7 @@ public class SavingsService {
         // 3. Handle Initial Deposit (e.g., the 800k)
         if (initialDeposit != null && initialDeposit.compareTo(BigDecimal.ZERO) > 0) {
             // Deduct from Main Wallet
-            walletService.debitWalletForWithdrawal(userId, initialDeposit, "fund this event");
+            walletService.debitWalletForWithdrawal(userId, initialDeposit, "fund this savings");
 
             goal.setCurrentBalance(initialDeposit);
 
@@ -204,7 +204,7 @@ public class SavingsService {
             log.setAmount(initialDeposit);
             // NOTE: Add SAVINGS_DEPOSIT to your TransactionType Enum!
             log.setTransactionType(TransactionType.SAVINGS_DEPOSIT); 
-            log.setDescription("Funded event: " + name);
+            log.setDescription("Funded savings: " + name);
             log.setStatus(TransactionStatus.COMPLETED);
             log.setReference("SAVE-" + UUID.randomUUID().toString());
             log.setCreatedAt(LocalDateTime.now());
@@ -237,16 +237,16 @@ public class SavingsService {
             throw new IllegalArgumentException("Nothing to change.");
         }
         SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(goalId)
-                .orElseThrow(() -> new IllegalArgumentException("Event not found."));
+                .orElseThrow(() -> new IllegalArgumentException("Savings not found."));
         if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(userId)) {
-            throw new IllegalArgumentException("Event not found.");
+            throw new IllegalArgumentException("Savings not found.");
         }
 
         LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
         if (goal.getStatus() != SavingsStatus.ACTIVE
                 || goal.getMaturityDate() == null
                 || !today.isBefore(goal.getMaturityDate())) {
-            throw new IllegalStateException("This event can no longer be changed.");
+            throw new IllegalStateException("This savings can no longer be changed.");
         }
 
         boolean changed = false;
@@ -254,12 +254,12 @@ public class SavingsService {
         if (request.getName() != null) {
             String name = request.getName().trim();
             if (name.isEmpty() || name.length() > 100) {
-                throw new IllegalArgumentException("Enter an event name.");
+                throw new IllegalArgumentException("Enter a savings name.");
             }
             if (!name.equalsIgnoreCase(goal.getName())
                     && savingsGoalRepository.existsByUserIdAndNameIgnoreCaseAndStatusInAndIdNot(
                             userId, name, OPEN_EVENT_STATUSES, goal.getId())) {
-                throw new IllegalArgumentException("You already have an event named '" + name + "'");
+                throw new IllegalArgumentException("You already have a savings named '" + name + "'");
             }
             goal.setName(name);
             changed = true;
@@ -276,7 +276,7 @@ public class SavingsService {
         if (request.getCategory() != null) {
             EventCategory category = EventCategory.parse(request.getCategory());
             if (category == null) {
-                throw new IllegalArgumentException("Choose what this event is.");
+                throw new IllegalArgumentException("Choose what this savings is.");
             }
             goal.setCategory(category);
             changed = true;
@@ -298,7 +298,7 @@ public class SavingsService {
         if (request.getMaturityDate() != null) {
             LocalDate next = request.getMaturityDate();
             if (!next.isAfter(goal.getMaturityDate())) {
-                throw new IllegalArgumentException("The event day can only move to a later date.");
+                throw new IllegalArgumentException("The savings day can only move to a later date.");
             }
             long days = ChronoUnit.DAYS.between(today, next);
             if (days > 7) {
@@ -338,7 +338,7 @@ public class SavingsService {
         }
 
         if (goal.getStatus() != SavingsStatus.ACTIVE) {
-            throw new IllegalStateException("This event is no longer open for new money.");
+            throw new IllegalStateException("This savings is no longer open for new money.");
         }
 
         goal.setCurrentBalance(goal.getCurrentBalance().add(amount));
@@ -887,12 +887,12 @@ public class SavingsService {
             throw new SecurityException("You do not have permission to fund this savings goal.");
         }
         if (preview.getStatus() != SavingsStatus.ACTIVE) {
-            throw new IllegalStateException("This event is no longer open for new money.");
+            throw new IllegalStateException("This savings is no longer open for new money.");
         }
 
         // Debit the wallet before locking the event. The wallet is locked first
         // everywhere else money leaves it, and this whole method rolls back together.
-        walletService.debitWalletForWithdrawal(userId, amount, "top up this event");
+        walletService.debitWalletForWithdrawal(userId, amount, "top up this savings");
 
         SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(savingsGoalId)
                 .orElseThrow(() -> new IllegalArgumentException("Savings Goal not found"));
@@ -901,7 +901,7 @@ public class SavingsService {
             throw new SecurityException("You do not have permission to fund this savings goal.");
         }
         if (goal.getStatus() != SavingsStatus.ACTIVE) {
-            throw new IllegalStateException("This event is no longer open for new money.");
+            throw new IllegalStateException("This savings is no longer open for new money.");
         }
 
         goal.setCurrentBalance(goal.getCurrentBalance().add(amount));

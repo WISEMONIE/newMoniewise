@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your event is coming up</title>
+  <title>Your savings is coming up</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -161,7 +161,7 @@
       <p class="greeting">Hey <span th:text="${firstName}">there</span>,</p>
 
       <p class="body-text">
-        Your event <strong th:text="${goalName}">Wedding</strong> unlocks on
+        Your savings <strong th:text="${goalName}">Wedding</strong> unlocks on
         <strong th:text="${maturityDateLabel}">a date</strong>.
         If you still need to prepare, add toward it before that day.
         The money stays locked until then.
@@ -183,7 +183,7 @@
       </div>
 
       <p th:unless="${hasInterest}" class="no-interest-note">
-        <strong>Please note:</strong> Events do not earn interest.
+        <strong>Please note:</strong> Savings do not earn interest.
         The payout is the money you put in.
       </p>
 
@@ -199,8 +199,8 @@
       <div class="info-row">
         <div class="info-icon">🌱</div>
         <div class="info-text">
-          <strong>Roll it into a new event</strong><br>
-          Start a fresh event with your full payout already inside it.
+          <strong>Roll it into a new savings</strong><br>
+          Start a fresh savings with your full payout already inside it.
         </div>
       </div>
       <div class="info-row">
@@ -215,18 +215,18 @@
         <div class="info-text">
           <strong>Withdraw and decide from there</strong><br>
           Move it to your wallet, then split it however you like: spend some, transfer some to your
-          bank, or seed a new event with the rest.
+          bank, or seed a new savings with the rest.
         </div>
       </div>
 
       <div class="notice">
         <strong>Good to know:</strong> withdrawing pays your full balance straight into
         your Wisemonie wallet instantly, not your bank account. From your wallet, you're free to
-        transfer to your bank, send to a friend, fund a budget, or start a new event whenever you're ready.
+        transfer to your bank, send to a friend, fund a budget, or start a new savings whenever you're ready.
       </div>
 
       <p class="body-text" style="margin-top: 4px; margin-bottom: 0;">
-        Open the Wisemonie app and head to <strong>Events</strong> to see <span th:text="${goalName}">this event</span>
+        Open the Wisemonie app and head to <strong>Savings</strong> to see <span th:text="${goalName}">this savings</span>
         and decide what's next.<br><br>The Wisemonie Team
       </p>
 
@@ -235,7 +235,7 @@
     <div class="card-footer">
       <div class="footer-brand">Wisemonie</div>
       <p class="footer-text">
-        You're receiving this because you have an event on Wisemonie.<br>
+        You're receiving this because you have a savings on Wisemonie.<br>
         Questions? <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
       </p>
       <div class="social-row">

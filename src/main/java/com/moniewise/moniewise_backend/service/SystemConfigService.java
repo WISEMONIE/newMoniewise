@@ -46,6 +46,11 @@ public class SystemConfigService {
      * revenue wallet only (no actual Rubies transfer is made for the fee).
      */
     public static final String RUBIES_REVENUE_ACCOUNT_NUMBER = "rubies.revenue.account.number";
+    /**
+     * Lagos date (yyyy-MM-dd) through which the revenue-account statement
+     * was fully read. The next run overlaps this date. It is not a balance.
+     */
+    public static final String REVENUE_STATEMENT_CURSOR = "reconciliation.revenue.statement.cursor";
     /** Display name for Moniewise's Rubies revenue wallet (used in narration). */
     public static final String RUBIES_REVENUE_ACCOUNT_NAME   = "rubies.revenue.account.name";
 

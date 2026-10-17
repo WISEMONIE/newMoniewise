@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.exception.WalletProvisioningException;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
+import com.moniewise.moniewise_backend.psp.WalletTransactionStatement;
 import com.moniewise.moniewise_backend.psp.rubies.dto.*;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
@@ -649,6 +650,46 @@ public class RubiesGateway implements PaymentGateway {
         }
 
         return Optional.of(transactions);
+    }
+
+    /**
+     * Same pages as {@link #fetchAllWalletTransactions}, plus a truncation flag
+     * so a reconciliation cursor is not moved past a window that was cut short.
+     * A failed first page is empty. A later failed page keeps the lines already
+     * read and marks them truncated.
+     */
+    @Override
+    public Optional<WalletTransactionStatement> fetchWalletTransactionStatement(
+            String startDate, String endDate, String searchItem, int page, int pageSize) {
+        String url = baseUrl + "/" + stage() + "/baas-wallet/read-all-wallet-transactions";
+        int currentPage = Math.max(1, page);
+        int safePageSize = pageSize > 0 ? pageSize : 100;
+        int pagesRead = 0;
+        List<Map<String, Object>> transactions = new ArrayList<>();
+
+        while (pagesRead < 50) {
+            pagesRead++;
+            RubiesReadAllTransactionsResponse body = fetchWalletTransactionsPage(
+                    url,
+                    new RubiesReadAllTransactionsRequest(
+                            startDate, endDate, searchItem, currentPage, safePageSize),
+                    false);
+            if (body == null || !body.isSuccess()) {
+                if (transactions.isEmpty()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new WalletTransactionStatement(transactions, true));
+            }
+            if (body.getData() != null) {
+                transactions.addAll(body.getData());
+            }
+            if (!body.isHasNext()) {
+                return Optional.of(new WalletTransactionStatement(transactions, false));
+            }
+            currentPage++;
+        }
+        logger.warn("[Rubies] Stopped revenue statement pagination after 50 pages");
+        return Optional.of(new WalletTransactionStatement(transactions, true));
     }
 
     private RubiesReadAllTransactionsResponse fetchWalletTransactionsPage(

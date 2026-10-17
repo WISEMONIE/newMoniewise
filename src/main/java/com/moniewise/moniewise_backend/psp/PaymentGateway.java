@@ -51,6 +51,16 @@ public interface PaymentGateway {
         return fetchAllWalletTransactions(startDate, endDate, page, pageSize);
     }
 
+    /**
+     * Account statement for one wallet. The default has no truncation signal.
+     * Rubies reports truncation when the page cap is hit.
+     */
+    default Optional<WalletTransactionStatement> fetchWalletTransactionStatement(
+            String startDate, String endDate, String searchItem, int page, int pageSize) {
+        return fetchAllWalletTransactions(startDate, endDate, searchItem, page, pageSize)
+                .map(lines -> new WalletTransactionStatement(lines, false));
+    }
+
     default Optional<String> fetchTransactionStatus(String providerReference) {
         return Optional.empty();
     }

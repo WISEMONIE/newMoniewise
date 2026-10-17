@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.service.ReconciliationService;
+import com.moniewise.moniewise_backend.service.RevenueStatementService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -34,9 +35,12 @@ public class ReconciliationAdminController {
     private static final Logger logger = LoggerFactory.getLogger(ReconciliationAdminController.class);
 
     private final ReconciliationService reconciliationService;
+    private final RevenueStatementService revenueStatementService;
 
-    public ReconciliationAdminController(ReconciliationService reconciliationService) {
+    public ReconciliationAdminController(ReconciliationService reconciliationService,
+                                         RevenueStatementService revenueStatementService) {
         this.reconciliationService = reconciliationService;
+        this.revenueStatementService = revenueStatementService;
     }
 
     /**
@@ -117,6 +121,32 @@ public class ReconciliationAdminController {
     @GetMapping("/revenue")
     public ResponseEntity<?> revenuePosition() {
         return ResponseEntity.ok(reconciliationService.reconcileRevenueWallet());
+    }
+
+    /**
+     * GET /admin/reconciliation/revenue-statement
+     *
+     * <p>Reads the revenue-account statement and matches it to the books.
+     * Does not heal, does not store a run, and does not move the cursor.
+     */
+    @GetMapping("/revenue-statement")
+    public ResponseEntity<?> revenueStatement() {
+        return ResponseEntity.ok(revenueStatementService.runReport());
+    }
+
+    /**
+     * POST /admin/reconciliation/revenue-statement/run
+     *
+     * <p>Same path as the 02:00, 06:30, and 14:00 Lagos job. Stores a report
+     * and moves the cursor when the window was fully read. Healing follows
+     * {@code moniewise.reconciliation.revenue-statement.heal-enabled}, which
+     * is off unless set. The revenue balance is not replaced with the Rubies balance.
+     */
+    @PostMapping("/revenue-statement/run")
+    public ResponseEntity<?> runRevenueStatement(Authentication auth) {
+        logger.warn("[Admin][Recon] Revenue statement run by admin={}",
+                auth != null ? auth.getName() : "unknown");
+        return ResponseEntity.ok(revenueStatementService.runScheduled());
     }
 
     @PostMapping("/run-daily")

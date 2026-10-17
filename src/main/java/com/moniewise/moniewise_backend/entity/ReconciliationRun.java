@@ -24,6 +24,7 @@ public class ReconciliationRun {
 
     public static final String RUN_TYPE_FULL = "FULL";
     public static final String RUN_TYPE_INCREMENTAL = "INCREMENTAL";
+    public static final String RUN_TYPE_REVENUE_STATEMENT = "REVENUE_STATEMENT";
 
     public static final String STATUS_STARTED = "STARTED";
     public static final String STATUS_COMPLETED = "COMPLETED";

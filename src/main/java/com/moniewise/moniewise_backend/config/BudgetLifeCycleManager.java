@@ -518,11 +518,11 @@ public class BudgetLifeCycleManager {
         envelope.setHasMatured(false);
 
         String envelopeName = envelope.getName() != null ? envelope.getName() : "This envelope";
-        String eventName = "that event";
+        String eventName = "that savings";
         if (targetSavingsGoalId != null) {
             eventName = savingsGoalRepository.findById(targetSavingsGoalId)
-                    .map(goal -> goal.getName() != null && !goal.getName().isBlank() ? goal.getName() : "that event")
-                    .orElse("that event");
+                    .map(goal -> goal.getName() != null && !goal.getName().isBlank() ? goal.getName() : "that savings")
+                    .orElse("that savings");
         }
         sweepNotes.add("'" + envelopeName + "' was not moved into '" + eventName + "' because " + reason
                 + ". ₦" + String.format("%,.2f", amount) + " is still in the envelope.");
@@ -530,23 +530,23 @@ public class BudgetLifeCycleManager {
 
     private String savingsSweepSkipReason(Long savingsGoalId, Long userId, LocalDate today) {
         if (savingsGoalId == null) {
-            return "no event was selected";
+            return "no savings was selected";
         }
 
         Optional<SavingsGoal> goalOpt = savingsGoalRepository.findByIdForUpdate(savingsGoalId);
         if (goalOpt.isEmpty()) {
-            return "that event could not be found";
+            return "that savings could not be found";
         }
 
         SavingsGoal goal = goalOpt.get();
         if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(userId)) {
-            return "that event is not on this account";
+            return "that savings is not on this account";
         }
         if (goal.getStatus() != SavingsStatus.ACTIVE) {
-            return "that event has already ended";
+            return "that savings has already ended";
         }
         if (goal.getMaturityDate() == null || !today.isBefore(goal.getMaturityDate())) {
-            return "that event has already ended";
+            return "that savings has already ended";
         }
 
         return null;
