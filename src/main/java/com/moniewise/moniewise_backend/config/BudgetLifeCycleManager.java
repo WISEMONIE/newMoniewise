@@ -12,6 +12,7 @@ import com.moniewise.moniewise_backend.service.BadgeAwardService;
 import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.IntervalReleaseRules;
+import com.moniewise.moniewise_backend.service.WeeklyReleaseRules;
 import com.moniewise.moniewise_backend.service.FeeReserveService;
 import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
@@ -38,7 +39,6 @@ import javax.persistence.PersistenceContext;
 import java.math.BigDecimal;
 import java.time.*;
 import java.time.format.DateTimeParseException;
-import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -1675,6 +1675,34 @@ public class BudgetLifeCycleManager {
         pendingDisbursementRepository.deleteAll(disbursementsToDelete);
     }
 
+    /**
+     * Weekly envelopes saved before the Monday fix still point at the Monday
+     * after next. Move that future trigger back to the real next Monday.
+     * This does not open a pocket and does not pay a missed week.
+     */
+    @Scheduled(cron = "0 10 3 * * ?", zone = "Africa/Lagos")
+    @Transactional
+    public void alignWeeklyResetSchedules() {
+        List<Envelope> weekly = envelopeRepository.findByConditionsType("weekly");
+        int moved = 0;
+        for (Envelope envelope : weekly) {
+            Budget budget = envelope.getBudget();
+            if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
+                continue;
+            }
+            LocalDateTime stored = envelope.getNextDisbursementAt();
+            LocalDateTime corrected = calculateNextDisbursementTime(envelope);
+            if (corrected == null || stored == null || !stored.isAfter(corrected)) {
+                continue;
+            }
+            scheduleDynamicTasks(envelope);
+            moved++;
+        }
+        if (moved > 0) {
+            logger.info("Moved {} weekly reset(s) onto the coming Monday.", moved);
+        }
+    }
+
     public LocalDateTime calculateNextDisbursementTime(Envelope envelope) {
         Budget budget = envelope.getBudget();
 
@@ -1822,27 +1850,16 @@ public class BudgetLifeCycleManager {
                 return next;
 
             case "weekly":
-                LocalDate nextWeekStart = last.toLocalDate()
-                        .plusWeeks(1)
-                        .with(TemporalAdjusters.next(DayOfWeek.MONDAY));
-
-                LocalDateTime targetTime1 = nextWeekStart.atStartOfDay();
-
-                // ✅ CHANGED TO !targetTime1.isAfter(now)
-                while (!targetTime1.isAfter(now)) {
-                    targetTime1 = targetTime1.plusWeeks(1);
-                }
-                if (budgetStart != null && targetTime1.toLocalDate().isBefore(budgetStart)) {
-                    targetTime1 = budgetStart.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY)).atStartOfDay();
-                    while (!targetTime1.isAfter(now)) {
-                        targetTime1 = targetTime1.plusWeeks(1);
-                    }
-                }
-
-                if (targetTime1.isAfter(budgetEnd.atTime(23, 59, 59))) {
+                if (last == null) {
                     return null;
                 }
-                return targetTime1;
+                // Next Monday after the last release. Adding a week first
+                // skipped that Monday and opened the pocket a week late.
+                return WeeklyReleaseRules.nextReset(
+                        last.toLocalDate(),
+                        now,
+                        budgetStart,
+                        budgetEnd);
 
             case "dynamic":
                 if (!conditions.containsKey("days") || !conditions.containsKey("disbursementTime")) {

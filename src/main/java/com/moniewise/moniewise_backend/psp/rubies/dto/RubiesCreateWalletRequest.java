@@ -69,7 +69,26 @@ public class RubiesCreateWalletRequest {
         this.dob         = dob;
         this.countryCode  = "NG";
         this.currency     = "NGN";
+        // Business and merchant wallets stay unprefixed. An individual wallet
+        // opts in through forIndividualWallet().
         this.accountPrefix = false;
+    }
+
+    /**
+     * Individual wallet. The BVN first and last name are sent unchanged so
+     * Rubies can match them. {@code accountPrefix} asks Rubies to place the
+     * approved business name in front of that legal name.
+     */
+    public static RubiesCreateWalletRequest forIndividualWallet(String bvn,
+                                                                String firstName,
+                                                                String lastName,
+                                                                String email,
+                                                                String phoneNumber,
+                                                                String dob) {
+        RubiesCreateWalletRequest request = new RubiesCreateWalletRequest(
+                bvn, firstName, lastName, email, phoneNumber, dob);
+        request.setAccountPrefix(true);
+        return request;
     }
 
     // ── Getters & Setters ─────────────────────────────────────────────────────

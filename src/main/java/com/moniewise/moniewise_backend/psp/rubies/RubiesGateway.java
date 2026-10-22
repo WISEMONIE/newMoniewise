@@ -274,7 +274,7 @@ public class RubiesGateway implements PaymentGateway {
             throw WalletProvisioningException.missingVerifiedKycData();
         }
 
-        RubiesCreateWalletRequest req = new RubiesCreateWalletRequest(
+        RubiesCreateWalletRequest req = RubiesCreateWalletRequest.forIndividualWallet(
                 user.getBvn(),
                 firstName,
                 lastName,
@@ -348,6 +348,8 @@ public class RubiesGateway implements PaymentGateway {
         String stage = stage();
         String url   = baseUrl + "/" + stage + "/baas-wallet/create-wallet";
 
+        // Revenue wallet is a business account. The prefix is compulsory for
+        // individuals only, so this request leaves accountPrefix false.
         RubiesCreateWalletRequest req = new RubiesCreateWalletRequest(
                 bvn, firstName, lastName, email, phone, dateOfBirth);
 
