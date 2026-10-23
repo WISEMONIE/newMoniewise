@@ -140,7 +140,7 @@ public class ReconciliationAdminController {
      * <p>Same path as the 02:00, 06:30, and 14:00 Lagos job. Stores a report
      * and moves the cursor when the window was fully read. Healing follows
      * {@code moniewise.reconciliation.revenue-statement.heal-enabled}, which
-     * is off unless set. The revenue balance is not replaced with the Rubies balance.
+     * is on unless set to false. The revenue balance is not replaced with the Rubies balance.
      */
     @PostMapping("/revenue-statement/run")
     public ResponseEntity<?> runRevenueStatement(Authentication auth) {

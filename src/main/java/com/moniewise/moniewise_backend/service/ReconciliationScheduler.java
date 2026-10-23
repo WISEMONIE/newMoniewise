@@ -40,8 +40,8 @@ public class ReconciliationScheduler {
     }
 
     /**
-     * 06:30 Lagos. Reads the revenue-account statement and stores a report.
-     * Healing stays off unless the statement heal flag is turned on.
+     * 06:30 Lagos. Reads the revenue-account statement, stores a report, and
+     * books a known line when statement healing is on.
      */
     @Scheduled(cron = "${moniewise.reconciliation.revenue-wallet.cron:0 30 6 * * ?}", zone = "Africa/Lagos")
     public void runRevenueWalletReconciliation() {

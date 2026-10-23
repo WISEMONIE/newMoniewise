@@ -56,8 +56,8 @@ import java.util.Set;
  * books. The scheduled run stores a report. It does not replace the revenue
  * wallet balance with the Rubies balance.
  *
- * <p>Healing is off unless {@code moniewise.reconciliation.revenue-statement.heal-enabled}
- * is true. A healed line must fall on or after the cutoff, and the reference
+ * <p>Healing is on unless {@code moniewise.reconciliation.revenue-statement.heal-enabled}
+ * is set to false. A healed line must fall on or after the cutoff, and the reference
  * and amount must match one known pattern. An airtime credit books only the
  * margin. An opening-fee debit books only when the statement names
  * {@code WALLET-OPEN-} or {@code KYC-BVN-} and the amount is the configured fee.
@@ -105,7 +105,7 @@ public class RevenueStatementService {
             RevenueClassificationService revenueClassificationService,
             ObjectMapper objectMapper,
             PlatformTransactionManager transactionManager,
-            @Value("${moniewise.reconciliation.revenue-statement.heal-enabled:false}") boolean healEnabled,
+            @Value("${moniewise.reconciliation.revenue-statement.heal-enabled:true}") boolean healEnabled,
             @Value("${moniewise.reconciliation.revenue-statement.heal-after:2026-10-18}") String healAfter,
             @Value("${moniewise.reconciliation.revenue-statement.lookback-days:14}") int lookbackDays,
             @Value("${moniewise.reconciliation.revenue-statement.overlap-days:1}") int overlapDays,
