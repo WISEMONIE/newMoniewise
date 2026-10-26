@@ -158,6 +158,12 @@ public class User {
     @Column(name = "referral_source", length = 50)
     private String referralSource;
 
+    @Column(name = "referral_code", length = 16, unique = true)
+    private String referralCode;
+
+    @Column(name = "referred_by_user_id")
+    private Long referredByUserId;
+
     // For JwtUtil compatibility (pass email as token subject)
     public String getUsername() {
         return email;

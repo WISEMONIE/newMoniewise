@@ -70,6 +70,7 @@ public class BudgetService {
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final RedisTemplate<String, String> redisTemplate;
     private final FeeReserveService feeReserveService;
+    private final ReferralService referralService;
 
     /** Short-lived cache for read-heavy GET /budgets/{id}/envelopes calls. */
     private static final String ENVELOPES_CACHE_PREFIX = "envelopes:";
@@ -94,7 +95,8 @@ public class BudgetService {
             SystemConfigService systemConfig,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
             RedisTemplate<String, String> redisTemplate,
-            FeeReserveService feeReserveService) {
+            FeeReserveService feeReserveService,
+            ReferralService referralService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -114,6 +116,7 @@ public class BudgetService {
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.redisTemplate = redisTemplate;
         this.feeReserveService = feeReserveService;
+        this.referralService = referralService;
     }
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetService.class);
@@ -183,7 +186,11 @@ public class BudgetService {
         validateEnvelopeCount(request);
 
         BigDecimal originalAmount = request.getTotalAmount();
-        BigDecimal creationFee = calculateBudgetCreationFee(durationDays, user.getId()).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal rawCreationFee = calculateBudgetCreationFee(durationDays, user.getId())
+                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal creationFee = referralService.adjustedFee(user.getId(), rawCreationFee)
+                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal referralCredit = rawCreationFee.subtract(creationFee).max(BigDecimal.ZERO);
         Map<EnvelopeRequest, BigDecimal> finalAmounts = calculateFinalEnvelopeAmounts(request, originalAmount);
         validateEnvelopePercentages(request);
 
@@ -202,7 +209,8 @@ public class BudgetService {
                 totalNeeded,
                 walletBalance,
                 shortfall,
-                durationDays
+                durationDays,
+                referralCredit
         );
         details.put("budgetAmount", originalAmount.setScale(2, RoundingMode.HALF_UP));
         details.put("canCreateBudget", walletBalance.compareTo(totalNeeded) >= 0);
@@ -332,8 +340,10 @@ public class BudgetService {
             BigDecimal totalNeeded,
             BigDecimal walletBalance,
             BigDecimal shortfall,
-            long durationDays) {
+            long durationDays,
+            BigDecimal referralCredit) {
         Map<String, Object> details = new LinkedHashMap<>();
+        BigDecimal credit = referralCredit == null ? BigDecimal.ZERO : referralCredit;
         details.put("currency", "NGN");
         details.put("durationDays", durationDays);
         details.put("feeIntervals", calculateBudgetCreationFeeIntervals(durationDays));
@@ -348,6 +358,8 @@ public class BudgetService {
         details.put("walletBalance", walletBalance);
         details.put("shortfall", shortfall);
         details.put("amountToFund", shortfall);
+        details.put("referralCreditApplied", credit.signum() > 0);
+        details.put("referralCreditAmount", credit);
         return details;
     }
 
@@ -837,7 +849,10 @@ public class BudgetService {
 
         // === CALCULATE FEE (read from system_config — never hardcoded) ===
         // budget.creation.fee = 0 means no fee charged. Positive value = fee per 30-day interval.
-        BigDecimal fee = calculateBudgetCreationFee(durationDays, user.getId());
+        // One earned referral removes a single fee unit. The waived unit is not revenue.
+        BigDecimal rawFee = calculateBudgetCreationFee(durationDays, user.getId());
+        BigDecimal fee = referralService.adjustedFee(user.getId(), rawFee);
+        BigDecimal referralCredit = rawFee.subtract(fee).max(BigDecimal.ZERO);
         BigDecimal originalAmount = request.getTotalAmount();   // This is what goes to envelopes
 
         // === ENVELOPE PROCESSING & ROUNDING (unchanged logic) ===
@@ -878,7 +893,8 @@ public class BudgetService {
                     totalNeeded,
                     availableBalance,
                     shortfall,
-                    durationDays
+                    durationDays,
+                    referralCredit
             );
             details.put("canCreateBudget", false);
 
@@ -977,6 +993,10 @@ public class BudgetService {
 
         // === DEDUCT ALLOCATION FROM WALLET ===
         walletService.deductBalance(user.getId(), allocationSum);
+        if (referralCredit.signum() > 0) {
+            referralService.consumeCredit(user.getId(), savedBudget.getId(), referralCredit);
+        }
+        referralService.onBudgetFunded(user.getId());
 
         boolean isScheduled = savedBudget.getStatus() == BudgetStatus.SCHEDULED;
 

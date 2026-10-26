@@ -14,6 +14,7 @@ import com.moniewise.moniewise_backend.service.AbuseProtectionService;
 import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.HowToUseWisemonieNudgeService;
 import com.moniewise.moniewise_backend.service.OtpService;
+import com.moniewise.moniewise_backend.service.ReferralService;
 import com.moniewise.moniewise_backend.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -39,6 +40,7 @@ import java.util.Optional;
 public class UserController {
 
     private final UserService userService;
+    private final ReferralService referralService;
     private final OtpService otpService;
     private final UserRepository userRepository;
     private final WalletRepository walletRepository;
@@ -195,6 +197,20 @@ public class UserController {
             return forwarded.split(",")[0].trim();
         }
         return request.getRemoteAddr();
+    }
+
+    @GetMapping("/referral")
+    public ResponseEntity<?> referral(Authentication authentication) {
+        User user = userService.findByEmail(authentication.getName());
+        return ResponseEntity.ok(referralService.summary(user));
+    }
+
+    @PostMapping("/referral")
+    public ResponseEntity<?> attachReferral(@RequestBody Map<String, String> body, Authentication authentication) {
+        User user = userService.findByEmail(authentication.getName());
+        String code = body == null ? null : body.get("code");
+        boolean attached = referralService.attach(user, code);
+        return ResponseEntity.ok(Map.of("attached", attached));
     }
 
     @PostMapping("/profile")

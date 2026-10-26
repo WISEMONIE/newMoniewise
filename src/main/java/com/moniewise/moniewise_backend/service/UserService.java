@@ -78,8 +78,9 @@ public class UserService implements UserDetailsService {
     private final KycService kycService;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final ReferralService referralService;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, ActivationJourneyNudgeService activationJourneyNudgeService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, SavingsGoalRepository savingsGoalRepository, KycService kycService) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, ActivationJourneyNudgeService activationJourneyNudgeService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, SavingsGoalRepository savingsGoalRepository, KycService kycService, ReferralService referralService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -96,6 +97,7 @@ public class UserService implements UserDetailsService {
         this.kycService = kycService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+        this.referralService = referralService;
     }
 
     /**
@@ -770,6 +772,7 @@ public class UserService implements UserDetailsService {
         if (request.getReferralSource() != null && !request.getReferralSource().isBlank()) {
             user.setReferralSource(request.getReferralSource().trim());
         }
+        referralService.attach(user, request.getReferralCode());
 
 //        if (request.getDob() != null) {
 //            // Keep the raw list for backward-compatibility with the frontend model.

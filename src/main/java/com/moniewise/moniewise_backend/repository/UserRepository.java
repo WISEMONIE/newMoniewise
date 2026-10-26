@@ -29,6 +29,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findFirstByEmailOrderByCreatedAtAsc(String email);
 
     Optional<User> findByPhone(String phone);
+
+    Optional<User> findByReferralCode(String referralCode);
     Optional<User> findByEmailOrPhone(String email, String phone);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

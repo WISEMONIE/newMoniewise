@@ -26,6 +26,7 @@ public class ProfileRequest {
     private String savingsGoal;
     private String occupation;
     private String referralSource;
+    private String referralCode;
 
     @Past
     private LocalDate dob;
