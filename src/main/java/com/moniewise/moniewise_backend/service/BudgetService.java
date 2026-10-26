@@ -1600,10 +1600,11 @@ public class BudgetService {
             }
         }
 
-        return Map.of(
-                "greeting", greeting,
-                "budgets", budgetMap
-        );
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("greeting", greeting);
+        payload.put("budgets", budgetMap);
+        payload.put("referralReward", referralService.rewardForHome(user.getId()));
+        return payload;
     }
 
 //    private BudgetResponse mapToResponse(Budget budget) {

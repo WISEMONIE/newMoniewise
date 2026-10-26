@@ -14,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -178,6 +179,22 @@ class ReferralFeeCreditTest {
         assertEquals(new BigDecimal("200"), earned.getAmountWaived());
         assertEquals(ReferralReward.USED, earned.getStatus());
         assertEquals(88L, earned.getUsedBudgetId());
+    }
+
+    @Test
+    void theHomeCardTotalsEveryReadyCredit() {
+        when(systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO))
+                .thenReturn(new BigDecimal("200"));
+        when(referralRewardRepository.countByReferrerUserIdAndStatus(4L, ReferralReward.EARNED))
+                .thenReturn(3L);
+        when(referralRewardRepository.countByReferrerUserIdAndStatus(4L, ReferralReward.PENDING))
+                .thenReturn(1L);
+
+        Map<String, Object> reward = service.rewardForHome(4L);
+
+        assertEquals(3L, reward.get("availableCredits"));
+        assertEquals(1L, reward.get("pendingCredits"));
+        assertEquals(new BigDecimal("600"), reward.get("rewardAmount"));
     }
 
     private static User user(Long id) {

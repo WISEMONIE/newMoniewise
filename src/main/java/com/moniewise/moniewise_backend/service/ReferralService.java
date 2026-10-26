@@ -164,6 +164,24 @@ public class ReferralService {
         referralRewardRepository.save(reward);
     }
 
+    /**
+     * Read-only reward for the home wallet card. Does not create a referral code.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> rewardForHome(Long userId) {
+        BigDecimal unit = feeUnit();
+        long available = userId == null ? 0 : referralRewardRepository
+                .countByReferrerUserIdAndStatus(userId, ReferralReward.EARNED);
+        long pending = userId == null ? 0 : referralRewardRepository
+                .countByReferrerUserIdAndStatus(userId, ReferralReward.PENDING);
+        Map<String, Object> reward = new LinkedHashMap<>();
+        reward.put("availableCredits", available);
+        reward.put("pendingCredits", pending);
+        reward.put("creditValue", unit);
+        reward.put("rewardAmount", unit.multiply(BigDecimal.valueOf(available)));
+        return reward;
+    }
+
     @Transactional
     public Map<String, Object> summary(User user) {
         String code = ensureCode(user);
