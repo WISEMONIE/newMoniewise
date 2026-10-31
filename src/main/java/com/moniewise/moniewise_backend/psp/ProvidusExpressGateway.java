@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.utils.WebhookSignatures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
@@ -52,8 +53,7 @@ public class ProvidusExpressGateway implements PaymentGateway {
     /**
      * Optional HMAC-SHA256 secret Providus uses to sign webhook calls.
      * Set PROVIDUS_WEBHOOK_SECRET once Providus confirms their signing mechanism.
-     * Until then the secret stays blank and the gateway runs in catch-all mode
-     * (accepts every request but logs a security warning).
+     * While it is blank every Providus webhook is rejected.
      */
     @Value("${providus.webhook-secret:}")
     private String webhookSecret;
@@ -72,7 +72,7 @@ public class ProvidusExpressGateway implements PaymentGateway {
             }
             if (webhookSecret == null || webhookSecret.isBlank()) {
                 logger.warn("[Providus][SECURITY] PROVIDUS_WEBHOOK_SECRET (providus.webhook-secret) is not set — " +
-                        "webhook signature verification is DISABLED (catch-all mode). Set before production.");
+                        "all Providus webhooks will be REJECTED until it is set.");
             }
         }
     }
@@ -604,29 +604,27 @@ public class ProvidusExpressGateway implements PaymentGateway {
      * <ul>
      *   <li><b>Secret configured</b> (PROVIDUS_WEBHOOK_SECRET set): validates the
      *       incoming signature against an HMAC-SHA256 of the raw payload.</li>
-     *   <li><b>No secret</b>: logs a security warning and accepts the request so
-     *       webhooks are not silently dropped while the secret is pending. Tighten
-     *       this once Providus confirms their signing header and key.</li>
+     *   <li><b>No secret</b>: rejects. The webhook route is public, so an unverified
+     *       request could forge a wallet credit.</li>
      * </ul>
      */
     @Override
     public boolean validateWebhookSignature(String signature, String rawPayload) {
         if (webhookSecret == null || webhookSecret.isBlank()) {
-            logger.warn("[PROVIDUS-WEBHOOK][SECURITY] No webhook secret configured — " +
-                    "accepting request without signature verification. " +
-                    "Set PROVIDUS_WEBHOOK_SECRET once Providus confirms their signing mechanism.");
-            return true;
+            logger.error("[PROVIDUS-WEBHOOK][SECURITY] Webhook rejected — PROVIDUS_WEBHOOK_SECRET " +
+                    "is not configured, so the request cannot be verified.");
+            return false;
         }
         if (signature == null || signature.isBlank()) {
             logger.warn("[PROVIDUS-WEBHOOK] Request received without a signature header — rejected.");
             return false;
         }
         try {
-            String computed = computeHmacSha256(rawPayload, webhookSecret);
-            boolean valid = computed.equalsIgnoreCase(signature.trim());
+            boolean valid = WebhookSignatures.hexDigestsMatch(
+                    computeHmacSha256(rawPayload, webhookSecret), signature);
             if (!valid) {
-                logger.warn("[PROVIDUS-WEBHOOK] Signature mismatch — computed={} received={}",
-                        computed, signature);
+                // Never log the computed digest — it is a valid signature for this payload.
+                logger.warn("[PROVIDUS-WEBHOOK] Signature mismatch — request rejected.");
             }
             return valid;
         } catch (Exception e) {

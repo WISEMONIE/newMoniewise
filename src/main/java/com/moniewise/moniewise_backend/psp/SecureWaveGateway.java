@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.service.SecureWavePaymentProvider;
+import com.moniewise.moniewise_backend.utils.WebhookSignatures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -134,7 +135,7 @@ public class SecureWaveGateway implements PaymentGateway {
             return false;
         }
         String calculatedHash = calculateHmacSha256(normalizePayload(rawPayload), secureWaveSecretKey);
-        return calculatedHash.equalsIgnoreCase(signature);
+        return WebhookSignatures.hexDigestsMatch(calculatedHash, signature);
     }
 
     private String normalizePayload(String rawPayload) {

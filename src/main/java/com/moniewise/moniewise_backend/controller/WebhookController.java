@@ -71,9 +71,8 @@ public class WebhookController {
         // Accept whichever signature header Providus actually sends
         String signature = firstPresent(providusSig, xSig, webhookSig);
         if (signature == null) {
-            // No signature at all — forward anyway; the gateway will decide
-            // (catch-all mode until Providus confirms their header name)
-            logger.warn("[PROVIDUS-WEBHOOK] No signature header present — forwarding to gateway in catch-all mode");
+            // No signature at all — the gateway rejects it; forwarded so the attempt is still logged
+            logger.warn("[PROVIDUS-WEBHOOK] No signature header present — it will be rejected");
         }
 
         try {

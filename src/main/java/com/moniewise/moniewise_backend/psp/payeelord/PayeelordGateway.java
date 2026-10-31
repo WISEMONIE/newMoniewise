@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordAirtimePurchas
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordDataPurchaseRequest;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordDataPurchaseResponse;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
+import com.moniewise.moniewise_backend.utils.WebhookSignatures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -247,12 +248,10 @@ public class PayeelordGateway {
      * which header carries the digest or which hash algorithm is used. We mirror
      * Rubies' HMAC-SHA512 hex-digest convention as the most likely candidate.
      *
-     * <p>This method intentionally ACCEPTS (returns {@code true}) when no signature
-     * was supplied or the secret is unavailable, logging a security warning instead
-     * of rejecting — so legitimate webhooks are never silently dropped while this
-     * scheme is unverified. Once you've captured a real webhook delivery and
-     * confirmed the actual header name + algorithm, tighten this to reject on
-     * mismatch (mirror {@code RubiesGateway#validateWebhookSignature}).
+     * <p>Fails closed: a missing secret, a missing signature header, or an error while
+     * computing the digest all reject the request. The webhook is audit-only (the
+     * synchronous purchase response is the source of truth), so a rejected delivery
+     * loses nothing but the {@code webhookConfirmedAt} stamp.
      *
      * @param signature  raw signature header value, or {@code null} if the caller found none
      * @param rawPayload the exact raw request body bytes as a string (must match what was signed)
@@ -263,15 +262,13 @@ public class PayeelordGateway {
                 : resolveApiKey();
 
         if (secret == null || secret.isBlank()) {
-            logger.warn("[Payeelord][SECURITY] No webhook secret/API key configured — " +
-                    "accepting webhook without verification.");
-            return true;
+            logger.error("[Payeelord][SECURITY] Webhook rejected — no webhook secret/API key configured.");
+            return false;
         }
         if (signature == null || signature.isBlank()) {
-            logger.warn("[Payeelord][WEBHOOK] No signature header found on incoming webhook — " +
-                    "the carrier header name is still unconfirmed (see PayeelordGateway Javadoc). " +
-                    "Accepting as audit-trail-only pending live verification.");
-            return true;
+            logger.warn("[Payeelord][WEBHOOK] Webhook rejected — no signature header found " +
+                    "(the carrier header name is still unconfirmed, see PayeelordGateway Javadoc).");
+            return false;
         }
         try {
             Mac mac = Mac.getInstance("HmacSHA512");
@@ -283,16 +280,15 @@ public class PayeelordGateway {
                 if (h.length() == 1) hex.append('0');
                 hex.append(h);
             }
-            String expected = hex.toString();
-            boolean valid = expected.equalsIgnoreCase(signature.trim());
+            boolean valid = WebhookSignatures.hexDigestsMatch(hex.toString(), signature);
             if (!valid) {
-                logger.warn("[Payeelord][WEBHOOK] Signature mismatch (scheme unverified — see Javadoc). " +
-                        "expected(sha512 hex)={} received={}", expected, signature.trim());
+                // Never log the expected digest — it is a valid signature for this payload.
+                logger.warn("[Payeelord][WEBHOOK] Signature mismatch (scheme unverified — see Javadoc).");
             }
             return valid;
         } catch (Exception e) {
             logger.error("[Payeelord][WEBHOOK] HMAC validation threw an exception", e);
-            return true; // fail-open while the scheme is unverified — see Javadoc
+            return false;
         }
     }
 

@@ -31,9 +31,8 @@ import org.springframework.web.bind.annotation.*;
  * algorithm. Mirroring the Providus precedent (whose header was equally
  * undocumented at integration time, see {@link WebhookController#handleProvidusWebhook}),
  * this endpoint accepts several plausible candidates and forwards whichever is
- * non-blank to {@link PayeelordGateway#validateWebhookSignature}, which itself
- * fails open (accepts + logs a security warning) until the scheme is confirmed
- * against a captured live delivery.
+ * non-blank to {@link PayeelordGateway#validateWebhookSignature}, which fails
+ * closed (rejects) when the signature is missing or does not match.
  *
  * <p>The endpoint always returns {@code 200 OK} once the signature check passes —
  * including when downstream processing throws — so Payeelord does not retry
@@ -73,7 +72,7 @@ public class PayeelordWebhookController {
         String signature = firstPresent(payeelordSig, xSig, webhookSig);
         if (signature == null) {
             logger.warn("[PAYEELORD-WEBHOOK] No signature header present (checked X-Payeelord-Signature, " +
-                    "X-Signature, X-Webhook-Signature) — forwarding to gateway in catch-all mode " +
+                    "X-Signature, X-Webhook-Signature) — it will be rejected " +
                     "(header name unconfirmed, see PayeelordWebhookController Javadoc)");
         }
 

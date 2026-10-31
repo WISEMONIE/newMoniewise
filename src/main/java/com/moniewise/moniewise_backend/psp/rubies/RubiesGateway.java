@@ -9,6 +9,7 @@ import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.WalletTransactionStatement;
 import com.moniewise.moniewise_backend.psp.rubies.dto.*;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
+import com.moniewise.moniewise_backend.utils.WebhookSignatures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -64,8 +65,8 @@ public class RubiesGateway implements PaymentGateway {
     /**
      * HMAC-SHA512 secret Rubies uses to sign webhook notifications.
      * Set {@code RUBIES_WEBHOOK_SECRET} env var (maps to {@code rubies.webhook.secret}).
-     * While blank the gateway logs a security warning and accepts all webhooks —
-     * tighten this before going live.
+     * While blank (and no header key/value pair is set on {@code WebhookService})
+     * every webhook is rejected.
      */
     @Value("${rubies.webhook.secret:}")
     private String webhookSecret;
@@ -107,7 +108,7 @@ public class RubiesGateway implements PaymentGateway {
         }
         if (webhookSecret == null || webhookSecret.isBlank()) {
             logger.warn("[Rubies][SECURITY] RUBIES_WEBHOOK_SECRET (rubies.webhook.secret) is not set — " +
-                    "webhook signature verification is DISABLED. Set the env var before going live.");
+                    "webhooks will be REJECTED unless RUBIES_WEBHOOK_HEADER_KEY/_VALUE are configured.");
         }
         boolean canAutoRefresh = !isBlank(rubiesEmail) && !isBlank(rubiesPassword);
         if (!canAutoRefresh) {
@@ -820,16 +821,18 @@ public class RubiesGateway implements PaymentGateway {
      *   <li><b>Secret set</b> ({@code rubies.webhook.secret} / {@code RUBIES_WEBHOOK_SECRET}):
      *       computes HMAC-SHA512 of the raw payload and compares against the header value.
      *       Returns {@code false} (rejects) if the header is absent or the digest does not match.</li>
-     *   <li><b>No secret</b>: logs a security warning and accepts the request so webhooks
-     *       are not silently dropped during development. Tighten before production.</li>
+     *   <li><b>No secret</b>: rejects. The webhook route is public, so an unverified
+     *       request could forge a wallet credit. Configure either this secret or the
+     *       {@code RUBIES_WEBHOOK_HEADER_KEY}/{@code _VALUE} pair (checked first by
+     *       {@code WebhookService}).</li>
      * </ul>
      */
     @Override
     public boolean validateWebhookSignature(String signature, String rawPayload) {
         if (webhookSecret == null || webhookSecret.isBlank()) {
-            logger.warn("[Rubies][SECURITY] No webhook secret configured — accepting without verification. " +
-                    "Set RUBIES_WEBHOOK_SECRET (rubies.webhook.secret) before production.");
-            return true;
+            logger.error("[Rubies][SECURITY] Webhook rejected — neither RUBIES_WEBHOOK_SECRET nor " +
+                    "RUBIES_WEBHOOK_HEADER_KEY/_VALUE is configured, so the request cannot be verified.");
+            return false;
         }
         if (signature == null || signature.isBlank()) {
             logger.warn("[Rubies-WEBHOOK] Missing X-Rubies-Signature header — request rejected.");
@@ -845,11 +848,10 @@ public class RubiesGateway implements PaymentGateway {
                 if (h.length() == 1) hex.append('0');
                 hex.append(h);
             }
-            String expected = hex.toString();
-            boolean valid = expected.equalsIgnoreCase(signature.trim());
+            boolean valid = WebhookSignatures.hexDigestsMatch(hex.toString(), signature);
             if (!valid) {
-                logger.warn("[Rubies-WEBHOOK] Signature mismatch — expected={} received={}",
-                        expected, signature.trim());
+                // Never log the expected digest — it is a valid signature for this payload.
+                logger.warn("[Rubies-WEBHOOK] Signature mismatch — request rejected.");
             }
             return valid;
         } catch (Exception e) {

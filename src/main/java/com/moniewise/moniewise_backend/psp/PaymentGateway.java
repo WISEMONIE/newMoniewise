@@ -33,8 +33,12 @@ public interface PaymentGateway {
         return null;
     }
 
+    /**
+     * Rejects by default: a gateway that receives webhooks must override this with a
+     * real check. Webhook routes are public, so accepting here would let anyone forge events.
+     */
     default boolean validateWebhookSignature(String signature, String rawPayload) {
-        return true;
+        return false;
     }
 
     default Optional<BigDecimal> fetchWalletBalance(String walletReference) {

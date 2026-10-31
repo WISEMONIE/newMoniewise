@@ -166,7 +166,7 @@ public class WebhookService {
      * <p>Flow:
      * <ol>
      *   <li>Log the raw payload immediately (critical for learning Providus's format)</li>
-     *   <li>Validate signature (HMAC-SHA256 if secret configured, catch-all mode otherwise)</li>
+     *   <li>Validate signature (HMAC-SHA256; rejected when no secret is configured)</li>
      *   <li>Extract event type and reference, generate idempotency key</li>
      *   <li>Persist to {@code webhook_events} for auditability</li>
      *   <li>Route to deposit processor, withdrawal-success, or withdrawal-failed handler</li>
@@ -379,9 +379,9 @@ public class WebhookService {
      * is actually configured — see {@link #rubiesWebhookHeaderKey} for the
      * full rationale. In short: Rubies' own webhook documentation describes
      * no payload-signing scheme at all (just "configure your callback URL"),
-     * so the legacy HMAC {@code X-Rubies-Signature} check is very likely to
-     * either fail-open (no secret configured) or hard-reject every single
-     * real webhook (secret configured but Rubies never sends the header).
+     * so the legacy HMAC {@code X-Rubies-Signature} check will very likely
+     * reject every real webhook — with or without a secret configured. Set the
+     * header key/value pair below in production.
      *
      * <p>Precedence:
      * <ol>
