@@ -16,6 +16,7 @@ import com.moniewise.moniewise_backend.service.HowToUseWisemonieNudgeService;
 import com.moniewise.moniewise_backend.service.OtpService;
 import com.moniewise.moniewise_backend.service.ReferralService;
 import com.moniewise.moniewise_backend.service.UserService;
+import com.moniewise.moniewise_backend.utils.ProfileCompletion;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -322,14 +323,7 @@ public class UserController {
     // Image upload/delete endpoints are in UserController lines 53–78 (Firebase Storage)
 
     private boolean needsProfileUpdate(User user) {
-        Map<String, Object> profileData = user.getProfileData();
-        String firstName = profileData != null ? String.valueOf(profileData.getOrDefault("firstName", "")) : "";
-        String lastName = profileData != null ? String.valueOf(profileData.getOrDefault("lastName", "")) : "";
-        return isBlank(user.getPhone()) || isBlank(user.getBvn()) || isBlank(firstName) || isBlank(lastName);
-    }
-
-    private boolean isBlank(String value) {
-        return value == null || value.isBlank();
+        return ProfileCompletion.needsProfileUpdate(user);
     }
 
     private String extractSessionId(String authHeader) {

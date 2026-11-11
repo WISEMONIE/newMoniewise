@@ -31,6 +31,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -41,6 +42,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -103,6 +105,9 @@ public class WalletService {
     @Autowired
     @Lazy
     private WalletService self;
+
+    /** One opener per user on this process, so a double tap cannot call Rubies twice. */
+    private final ConcurrentHashMap<Long, Object> walletOpeningLocks = new ConcurrentHashMap<>();
 
     public WalletService(
             WalletRepository walletRepository,
@@ -505,35 +510,50 @@ public class WalletService {
                 totalFee, userId);
     }
 
-    @Transactional
+    /**
+     * Opens the provider account outside the caller's transaction, then commits
+     * the wallet row on its own. A later failure in the caller cannot erase the
+     * account Rubies already created.
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public Wallet createWalletForUser(User user) {
         if (user.getId() == null) {
             throw new IllegalStateException("User must be saved before creating wallet");
         }
-
-        if (walletRepository.existsByUser(user)) {
-            throw new IllegalStateException("Wallet already exists");
+        Object lock = walletOpeningLocks.computeIfAbsent(user.getId(), id -> new Object());
+        synchronized (lock) {
+            Optional<Wallet> existing = walletRepository.findByUserId(user.getId());
+            if (existing.isPresent() && hasFundingAccountNumber(existing.get())) {
+                return existing.get();
+            }
+            PaymentGateway gateway = paymentGatewayResolver.resolveDefault();
+            Map<String, String> virtualAccount = gateway.createVirtualAccount(user);
+            String accountNumber = virtualAccount.get("accountNumber");
+            if (accountNumber == null || !accountNumber.trim().matches("\\d{10}")) {
+                throw new IllegalStateException("Wallet provider did not return an account number");
+            }
+            return self.saveOpenedWallet(user.getId(), virtualAccount, gateway.getProviderName());
         }
+    }
 
-        Wallet wallet = new Wallet();
-        wallet.setUser(user);
-        wallet.setBalance(BigDecimal.ZERO);
-        wallet.setCurrency("NGN");
-        wallet.setStatus(WalletStatus.ACTIVE);
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Wallet saveOpenedWallet(Long userId, Map<String, String> virtualAccount, String providerName) {
+        Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
+        if (wallet != null && hasFundingAccountNumber(wallet)) {
+            return wallet;
+        }
+        if (wallet == null) {
+            wallet = new Wallet();
+            wallet.setUser(userRepository.getReferenceById(userId));
+            wallet.setBalance(BigDecimal.ZERO);
+            wallet.setCurrency("NGN");
+            wallet.setStatus(WalletStatus.ACTIVE);
+        }
         wallet.setUpdatedAt(LocalDateTime.now());
-        wallet.setProviderStatus("PENDING");
-
-        wallet = walletRepository.save(wallet);
-
-        PaymentGateway gateway = paymentGatewayResolver.resolveDefault();
-        Map<String, String> virtualAccount = gateway.createVirtualAccount(user);
-
         wallet.setAccountNumber(virtualAccount.get("accountNumber"));
         wallet.setAccountName(virtualAccount.get("accountName"));
         wallet.setBankName(virtualAccount.get("bank"));
-
-        // optional provider fields: set only if returned
-        wallet.setProviderName(virtualAccount.getOrDefault("providerName", gateway.getProviderName()));
+        wallet.setProviderName(virtualAccount.getOrDefault("providerName", providerName));
         wallet.setProviderCustomerRef(virtualAccount.get("providerCustomerRef"));
         wallet.setProviderWalletRef(virtualAccount.get("providerWalletRef"));
         wallet.setMasterWalletRef(virtualAccount.get("masterWalletRef"));
@@ -550,9 +570,26 @@ public class WalletService {
         }
         wallet.setProviderMetadata(providerMetadata);
 
-        Wallet created = walletRepository.save(wallet);
-        recordRubiesWalletOpeningFee(user, created);
+        Wallet created = walletRepository.saveAndFlush(wallet);
+        recordRubiesWalletOpeningFee(userRepository.getReferenceById(userId), created);
         return created;
+    }
+
+    private boolean hasFundingAccountNumber(Wallet wallet) {
+        String number = wallet.getAccountNumber();
+        return number != null && number.trim().matches("\\d{10}");
+    }
+
+    /**
+     * Loads the wallet inside the caller's session. Opening one returns a
+     * detached row, so this reads it again before any balance change.
+     */
+    private Wallet walletReadyForFunding(User user) {
+        return walletRepository.findByUser(user).orElseGet(() -> {
+            createWalletForUser(user);
+            return walletRepository.findByUserId(user.getId())
+                    .orElseThrow(() -> new IllegalStateException("Wallet was not saved"));
+        });
     }
 
     /**
@@ -589,8 +626,7 @@ public class WalletService {
         }
 
         if (suppressLogAndNotification) {
-            Wallet wallet = walletRepository.findByUser(user)
-                    .orElseGet(() -> createWalletForUser(user));
+            Wallet wallet = walletReadyForFunding(user);
 
             wallet.setBalance(wallet.getBalance().add(amount));
             wallet.setUpdatedAt(LocalDateTime.now());
@@ -1201,8 +1237,7 @@ public class WalletService {
         User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(email)
                 .orElseThrow(() -> new RuntimeException("User not found: " + email));
 
-        Wallet wallet = walletRepository.findByUser(user)
-                .orElseGet(() -> createWalletForUser(user));
+        Wallet wallet = walletReadyForFunding(user);
 
         wallet.setBalance(wallet.getBalance().add(netAmount));
         wallet.setUpdatedAt(LocalDateTime.now());

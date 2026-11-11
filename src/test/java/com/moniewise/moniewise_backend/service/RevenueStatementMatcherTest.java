@@ -78,7 +78,7 @@ class RevenueStatementMatcherTest {
                 .lines().get(0);
 
         assertEquals(Outcome.UNMATCHED, row.outcome());
-        assertFalse(row.healable());
+        assertTrue(row.healable());
     }
 
     @Test
@@ -120,7 +120,7 @@ class RevenueStatementMatcherTest {
                 .lines().get(0);
 
         assertEquals(Outcome.OPENING_FEE_UNATTRIBUTED, row.outcome());
-        assertFalse(row.healable());
+        assertTrue(row.healable());
     }
 
     @Test

@@ -172,14 +172,12 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
     /**
      * Finds "abandoned signups" — users who registered but never finished
      * onboarding, i.e. they have NEITHER a wallet NOR a KYC profile.
-     * (Wallet creation requires verified KYC data, so "no wallet + no KYC"
-     * reliably identifies someone who dropped off before completing their
-     * profile — as opposed to, say, a user mid-KYC whose wallet creation
-     * merely failed.)
+     * Someone who finished the lifestyle step and has not opened a wallet
+     * yet is a real account and is kept. The flag lives in profile_data.
      * <p>
      * Used by {@code IncompleteSignupLifecycleManager} to drive the
-     * "complete your profile" nudge-email cadence and, eventually, the
-     * 30-day purge of registrations that never went anywhere.
+     * "complete your profile" nudge-email cadence and the 30-day purge of
+     * registrations that never finished the lifestyle step.
      */
     @Query(value = """
             SELECT u.*
@@ -189,6 +187,7 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             WHERE w.id IS NULL
               AND k.id IS NULL
               AND u.is_deleted = false
+              AND COALESCE(u.profile_data->>'lifestyleComplete', 'false') <> 'true'
             ORDER BY u.created_at ASC
             """, nativeQuery = true)
     List<User> findIncompleteSignups();

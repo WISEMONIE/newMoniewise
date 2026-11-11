@@ -69,6 +69,12 @@ public class IncompleteSignupLifecycleManager {
     /** Registrations that are still incomplete after this many days get purged. */
     private static final int PURGE_AFTER_DAYS = 30;
 
+    /**
+     * Play Store review account. It stays incomplete on purpose (no wallet, no KYC)
+     * and has rows in user_events, so the purge must never include this id.
+     */
+    static final long PLAY_STORE_REVIEW_USER_ID = 71L;
+
     private static final String COMPLETE_PROFILE_ROUTE = "/complete_profile/";
     private static final long PUSH_TTL_SECONDS = 7_200L;
 
@@ -286,14 +292,15 @@ public class IncompleteSignupLifecycleManager {
      */
     @Transactional
     public void purgeIncompleteSignups(List<Long> userIds) {
-        if (userIds == null || userIds.isEmpty()) {
+        List<Long> ids = idsEligibleForPurge(userIds);
+        if (ids.isEmpty()) {
             return;
         }
 
-        logger.info("[ONBOARDING] Purging {} stale incomplete signup(s) (>{} days, never finished profile): {}",
-                userIds.size(), PURGE_AFTER_DAYS, userIds);
+        logger.info("[ONBOARDING] Purging {} stale incomplete signup(s) (>{} days, never finished profile): {}. User {} is excluded.",
+                ids.size(), PURGE_AFTER_DAYS, ids, PLAY_STORE_REVIEW_USER_ID);
 
-        Map<String, Object> params = Map.of("ids", userIds);
+        Map<String, Object> params = Map.of("ids", ids);
 
         // ── Leaf / dependent tables first ──
         deleteByUserId("transaction_requests", params);
@@ -330,11 +337,32 @@ public class IncompleteSignupLifecycleManager {
         // but running it keeps the purge symmetric with the manual script)
         deleteByUserId("kyc_profiles", params);
         deleteByUserId("wallets", params);
+        // No ON DELETE CASCADE. Leaving these rows makes the users delete fail.
+        deleteByUserId("user_events", params);
 
-        // Root
-        int deleted = jdbc.update("DELETE FROM users WHERE id IN (:ids)", params);
+        // Root. The review account is excluded again here so this statement
+        // cannot remove user 71 even if the id list is wrong.
+        Map<String, Object> userDelete = Map.of(
+                "ids", ids,
+                "keepUserId", PLAY_STORE_REVIEW_USER_ID);
+        int deleted = jdbc.update(
+                "DELETE FROM users WHERE id IN (:ids) AND id <> :keepUserId",
+                userDelete);
 
         logger.info("[ONBOARDING] Purge complete — removed {} stale registration(s) and all dependent rows", deleted);
+    }
+
+    static List<Long> idsEligibleForPurge(List<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = new ArrayList<>();
+        for (Long id : userIds) {
+            if (id != null && id != PLAY_STORE_REVIEW_USER_ID) {
+                ids.add(id);
+            }
+        }
+        return ids;
     }
 
     private void deleteByUserId(String table, Map<String, Object> params) {

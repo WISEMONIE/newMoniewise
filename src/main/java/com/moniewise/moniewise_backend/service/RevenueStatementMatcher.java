@@ -92,7 +92,10 @@ public final class RevenueStatementMatcher {
             BigDecimal amount,
             Direction direction,
             LocalDate occurredOn,
-            boolean posted
+            boolean posted,
+            String narration,
+            String counterpartyAccount,
+            String counterpartyName
     ) {
     }
 
@@ -115,7 +118,7 @@ public final class RevenueStatementMatcher {
 
     public static Line parse(Map<String, Object> raw) {
         if (raw == null || raw.isEmpty()) {
-            return new Line(List.of(), null, Direction.UNKNOWN, null, false);
+            return new Line(List.of(), null, Direction.UNKNOWN, null, false, null, null, null);
         }
         String code = firstString(raw, "responseCode", "response_code");
         boolean posted = code == null || code.isBlank() || "00".equals(code.trim());
@@ -124,7 +127,13 @@ public final class RevenueStatementMatcher {
         LocalDate occurredOn = parseDate(firstString(raw,
                 "transactionDate", "transactionDateTime", "createdAt", "created_at", "date", "tranDate"));
         List<String> references = references(raw);
-        return new Line(references, amount, direction, occurredOn, posted);
+        String narration = firstString(raw, "narration", "remark", "description", "paymentDescription");
+        String counterpartyAccount = firstString(raw,
+                "beneficiaryAccountNumber", "creditAccountNumber", "destinationAccount", "contraAccountNumber");
+        String counterpartyName = firstString(raw,
+                "beneficiaryName", "creditAccountName", "destinationAccountName", "contraAccountName");
+        return new Line(references, amount, direction, occurredOn, posted,
+                narration, counterpartyAccount, counterpartyName);
     }
 
     public static Report classify(List<Line> lines, Lookup lookup, BigDecimal openingFee, LocalDate healAfter) {
@@ -173,7 +182,7 @@ public final class RevenueStatementMatcher {
 
     private static Classified classifyOne(Line line, Lookup lookup, BigDecimal openingFee, LocalDate healAfter) {
         if (line == null) {
-            return new Classified(new Line(List.of(), null, Direction.UNKNOWN, null, false),
+            return new Classified(new Line(List.of(), null, Direction.UNKNOWN, null, false, null, null, null),
                     Outcome.UNPARSEABLE, null, false, null, null);
         }
         if (!line.posted()) {
@@ -203,7 +212,7 @@ public final class RevenueStatementMatcher {
         if (anyTransaction(line, lookup) || anyRevenueMention(line, lookup)) {
             return done(line, Outcome.MATCHED_FEE, key(line), false, null, null);
         }
-        return done(line, Outcome.UNMATCHED, key(line), false, null, null);
+        return done(line, Outcome.UNMATCHED, key(line), statementMovement(line), null, null);
     }
 
     private static Classified classifyDebit(Line line, Lookup lookup, BigDecimal openingFee, LocalDate healAfter) {
@@ -219,12 +228,24 @@ public final class RevenueStatementMatcher {
             return done(line, Outcome.OPENING_FEE_AMOUNT_DIFFERS, "WALLET-OPEN-" + userId, false, null, userId);
         }
         if (sameMoney(line.amount(), openingFee) && openingFee.signum() > 0) {
-            return done(line, Outcome.OPENING_FEE_UNATTRIBUTED, key(line), false, null, null);
+            return done(line, Outcome.OPENING_FEE_UNATTRIBUTED, key(line), statementMovement(line), null, null);
         }
         if (anyTransaction(line, lookup)) {
             return done(line, Outcome.MATCHED_OTHER, key(line), false, null, null);
         }
-        return done(line, Outcome.UNMATCHED, key(line), false, null, null);
+        return done(line, Outcome.UNMATCHED, key(line), statementMovement(line), null, null);
+    }
+
+    /**
+     * A posted statement line with its own reference can be written once.
+     * The cutoff does not apply: a transfer or a Rubies charge is real whenever it posted.
+     */
+    private static boolean statementMovement(Line line) {
+        return line.occurredOn() != null
+                && line.amount() != null
+                && line.amount().signum() > 0
+                && line.direction() != Direction.UNKNOWN
+                && key(line) != null;
     }
 
     private static boolean healable(Line line, LocalDate healAfter) {

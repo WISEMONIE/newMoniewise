@@ -17,8 +17,11 @@ import com.moniewise.moniewise_backend.enums.Role;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.utils.ProfileCompletion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -77,6 +80,10 @@ public class UserService implements UserDetailsService {
     private final KycProfileRepository kycProfileRepository;
     private final KycService kycService;
     private final StringRedisTemplate redisTemplate;
+
+    @Autowired
+    @Lazy
+    private UserService self;
     private final ObjectMapper objectMapper;
     private final ReferralService referralService;
 
@@ -695,8 +702,14 @@ public class UserService implements UserDetailsService {
         return userRepository.save(newUser);
     }
 
-    @Transactional
     public User updateProfile(String email, ProfileRequest request) {
+        User saved = self.persistProfile(email, request);
+        openWalletIfRequested(saved, request);
+        return userRepository.findById(saved.getId()).orElse(saved);
+    }
+
+    @Transactional
+    public User persistProfile(String email, ProfileRequest request) {
         User user = findByEmail(email);
 
         // ============================================================
@@ -720,13 +733,13 @@ public class UserService implements UserDetailsService {
         // ðŸ¦ 2. KYC DATA FOR SECUREWAVE
         // ============================================================
 
-        // Only set the BVN if it's currently empty.
-        // For later profile edits, a blank BVN means "leave the existing BVN unchanged".
+        // A blank BVN means "leave the existing BVN unchanged".
+        // Lifestyle signup omits it. The wallet screen sends it later.
         String incomingBvn = request.getBvn() != null ? request.getBvn().trim() : null;
-        if (user.getBvn() == null || user.getBvn().trim().isEmpty()) {
-            if (incomingBvn == null || incomingBvn.isEmpty()) {
-                throw new IllegalArgumentException("BVN is required to complete your profile.");
-            }
+        if (incomingBvn != null && incomingBvn.isEmpty()) {
+            incomingBvn = null;
+        }
+        if ((user.getBvn() == null || user.getBvn().trim().isEmpty()) && incomingBvn != null) {
             Optional<User> bvnOwner = userRepository.findGlobalByBvn(incomingBvn);
             if (bvnOwner.isPresent() && !bvnOwner.get().getId().equals(user.getId())) {
                 if (bvnOwner.get().isDeleted()) {
@@ -735,17 +748,15 @@ public class UserService implements UserDetailsService {
                 throw new IllegalArgumentException("This BVN is already linked to another account.");
             }
             user.setBvn(incomingBvn);
-        } else if (incomingBvn != null && !incomingBvn.isEmpty() && !user.getBvn().equals(incomingBvn)) {
-            // If they try to send a different BVN later, reject it.
+        } else if (incomingBvn != null && user.getBvn() != null
+                && !user.getBvn().trim().isEmpty()
+                && !user.getBvn().equals(incomingBvn)) {
             throw new IllegalArgumentException("BVN cannot be modified after initial setup. Contact support.");
         }
 
-        // Gender — required on first setup, updatable on edits.
         Gender incomingGender = request.getGender();
         if (incomingGender != null) {
-            user.setGender(incomingGender); // Always allow updating gender
-        } else if (user.getGender() == null) {
-            throw new IllegalArgumentException("Gender is required to complete your profile.");
+            user.setGender(incomingGender);
         }
 
         Map<String, Object> profileData = user.getProfileData();
@@ -758,16 +769,32 @@ public class UserService implements UserDetailsService {
         // whatever was set during initial setup (which matches the KYC table).
         // Regulators read from kyc_profiles; profile_data.name is only for display.
         boolean isFirstSetup = !walletRepository.existsByUser(user);
-        if (isFirstSetup) {
-            profileData.put("name", request.getFirstName() + " " + request.getLastName());
-            profileData.put("firstName", request.getFirstName());
-            profileData.put("lastName", request.getLastName());
+        String firstName = request.getFirstName() == null ? "" : request.getFirstName().trim();
+        String lastName = request.getLastName() == null ? "" : request.getLastName().trim();
+        if (isFirstSetup && !firstName.isEmpty() && !lastName.isEmpty()) {
+            profileData.put("name", firstName + " " + lastName);
+            profileData.put("firstName", firstName);
+            profileData.put("lastName", lastName);
         }
-        // Always update user-preference fields (these are never KYC data)
-        profileData.put("monthlyIncome", request.getMonthlyIncome());
-        profileData.put("mainExpense", request.getMainExpense());
-        profileData.put("savingsGoal", request.getSavingsGoal());
-        profileData.put("occupation", request.getOccupation());
+        // Only write the fields this request actually sent. A later wallet
+        // open must not wipe the lifestyle answers with blanks.
+        if (request.getMonthlyIncome() != null) {
+            profileData.put("monthlyIncome", request.getMonthlyIncome());
+        }
+        if (hasText(request.getMainExpense())) {
+            profileData.put("mainExpense", request.getMainExpense().trim());
+        }
+        if (hasText(request.getSavingsGoal())) {
+            profileData.put("savingsGoal", request.getSavingsGoal().trim());
+        }
+        if (hasText(request.getOccupation())) {
+            profileData.put("occupation", request.getOccupation().trim());
+        }
+        if (hasText(request.getOccupation())
+                && hasText(request.getMainExpense())
+                && hasText(request.getSavingsGoal())) {
+            profileData.put(ProfileCompletion.LIFESTYLE_COMPLETE, Boolean.TRUE);
+        }
 
         if (request.getReferralSource() != null && !request.getReferralSource().isBlank()) {
             user.setReferralSource(request.getReferralSource().trim());
@@ -847,55 +874,62 @@ public class UserService implements UserDetailsService {
         User savedUser = userRepository.save(user);
         syncProvidusCustomerProfileIfEnabled(savedUser, request);
 
-        // ============================================================
-        // âš¡ 3. CHECK & CREATE WALLET (Synchronous)
-        // ============================================================
-        if (!walletRepository.existsByUser(savedUser)) {
-            // Emergency off-switch: comment out this one invocation to skip the
-            // new BVN-provider fallback path during onboarding wallet creation.
-            ensureVerifiedKycBeforeWalletCreation(savedUser, request);
-
-            logger.info("âš¡ Profile complete. Creating Wallet for: {}", savedUser.getEmail());
-
-            // We do this synchronously. If SecureWave fails, it throws an error to the frontend!
-            Wallet newWallet = walletService.createWalletForUser(savedUser);
-
-            // Activation journey off-switch: comment out this one invocation to
-            // stop the post-wallet-created fund-wallet push/email.
-            activationJourneyNudgeService.nudgeAfterWalletCreated(savedUser.getId());
-
-            // We can keep the EMAIL sending asynchronous, because we don't want the user
-            // to wait on an SMTP server to finish loading.
-            // Extract first name from profileData for personalised welcome email
-            String welcomeFirstName = "";
-            try {
-                if (savedUser.getProfileData() != null) {
-                    Object nameObj = savedUser.getProfileData().get("name");
-                    if (nameObj != null) {
-                        String fullName = nameObj.toString().trim();
-                        welcomeFirstName = fullName.contains(" ")
-                                ? fullName.substring(0, fullName.indexOf(" "))
-                                : fullName;
-                    }
-                }
-            } catch (Exception ignored) {}
-            final String finalFirstName = welcomeFirstName;
-            CompletableFuture.runAsync(() -> {
-                try {
-                    notificationService.sendWelcomeEmail(
-                            savedUser.getEmail(),
-                            finalFirstName,
-                            newWallet.getAccountNumber(),
-                            newWallet.getBankName(),
-                            newWallet.getBalance()
-                    );
-                } catch (Exception e) {
-                    logger.error("Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
-                }
-            });
-        }
-
         return savedUser;
+    }
+
+    /**
+     * Runs after the profile transaction has committed, so a Rubies account
+     * can be stored even when a later step in this request fails.
+     */
+    private void openWalletIfRequested(User savedUser, ProfileRequest request) {
+        String incomingBvn = request.getBvn() != null ? request.getBvn().trim() : null;
+        if (incomingBvn != null && incomingBvn.isEmpty()) {
+            incomingBvn = null;
+        }
+        if (incomingBvn == null || savedUser.getId() == null || hasFundingAccount(savedUser.getId())) {
+            return;
+        }
+        ensureVerifiedKycBeforeWalletCreation(savedUser, request);
+        User fresh = userRepository.findById(savedUser.getId()).orElse(savedUser);
+        Wallet newWallet = walletService.createWalletForUser(fresh);
+        activationJourneyNudgeService.nudgeAfterWalletCreated(fresh.getId());
+
+        String welcomeFirstName = "";
+        try {
+            if (fresh.getProfileData() != null) {
+                Object nameObj = fresh.getProfileData().get("name");
+                if (nameObj != null) {
+                    String fullName = nameObj.toString().trim();
+                    welcomeFirstName = fullName.contains(" ")
+                            ? fullName.substring(0, fullName.indexOf(" "))
+                            : fullName;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        final String finalFirstName = welcomeFirstName;
+        CompletableFuture.runAsync(() -> {
+            try {
+                notificationService.sendWelcomeEmail(
+                        fresh.getEmail(),
+                        finalFirstName,
+                        newWallet.getAccountNumber(),
+                        newWallet.getBankName(),
+                        newWallet.getBalance()
+                );
+            } catch (Exception e) {
+                logger.error("Failed to send welcome email to {}: {}", fresh.getEmail(), e.getMessage());
+            }
+        });
+    }
+
+    private boolean hasFundingAccount(Long userId) {
+        return walletRepository.findByUserId(userId)
+                .map(wallet -> {
+                    String number = wallet.getAccountNumber();
+                    return number != null && number.trim().matches("\\d{10}");
+                })
+                .orElse(false);
     }
 
     private void ensureVerifiedKycBeforeWalletCreation(User user, ProfileRequest request) {
@@ -974,6 +1008,10 @@ public class UserService implements UserDetailsService {
             }
         }
         return null;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private String stringValue(Object value) {

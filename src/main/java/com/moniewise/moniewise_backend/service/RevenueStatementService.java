@@ -53,13 +53,15 @@ import java.util.Set;
 
 /**
  * Reads the Wisemonie revenue-account statement and matches each line to the
- * books. The scheduled run stores a report. It does not replace the revenue
- * wallet balance with the Rubies balance.
+ * books. A known airtime margin or named opening fee is booked as before.
+ * Any other posted line with its own reference is written once onto the
+ * revenue wallet, {@code transaction_logs}, and {@code revenue_logs}.
+ * The Rubies available balance is then compared with that wallet. A gap is
+ * stored on the run. The wallet balance is never replaced with the Rubies balance.
  *
  * <p>Healing is on unless {@code moniewise.reconciliation.revenue-statement.heal-enabled}
- * is set to false. A healed line must fall on or after the cutoff, and the reference
- * and amount must match one known pattern. An airtime credit books only the
- * margin. An opening-fee debit books only when the statement names
+ * is set to false. An airtime credit books only the margin, and only on or
+ * after the cutoff. An opening-fee debit books only when the statement names
  * {@code WALLET-OPEN-} or {@code KYC-BVN-} and the amount is the configured fee.
  */
 @Service
@@ -74,7 +76,8 @@ public class RevenueStatementService {
             TransactionType.BUDGET_FEE_COLLECTION,
             TransactionType.MARKUP_FEE_COLLECTION,
             TransactionType.WALLET_OPEN_FEE,
-            TransactionType.KYC_BVN_FEE);
+            TransactionType.KYC_BVN_FEE,
+            TransactionType.REVENUE_STATEMENT_ENTRY);
 
     private final WalletRepository walletRepository;
     private final TransactionLogRepository transactionLogRepository;
@@ -107,7 +110,7 @@ public class RevenueStatementService {
             PlatformTransactionManager transactionManager,
             @Value("${moniewise.reconciliation.revenue-statement.heal-enabled:true}") boolean healEnabled,
             @Value("${moniewise.reconciliation.revenue-statement.heal-after:2026-10-18}") String healAfter,
-            @Value("${moniewise.reconciliation.revenue-statement.lookback-days:14}") int lookbackDays,
+            @Value("${moniewise.reconciliation.revenue-statement.lookback-days:120}") int lookbackDays,
             @Value("${moniewise.reconciliation.revenue-statement.overlap-days:1}") int overlapDays,
             @Value("${moniewise.wallet.opening-fee:${moniewise.kyc.bvn-fee:70}}") BigDecimal openingFee) {
         this.walletRepository = walletRepository;
@@ -160,9 +163,13 @@ public class RevenueStatementService {
 
         LocalDate cursor = readCursor();
         LocalDate windowEnd = today;
+        LocalDate lookbackStart = windowEnd.minusDays(lookbackDays);
         LocalDate windowStart = cursor == null
-                ? windowEnd.minusDays(lookbackDays)
+                ? lookbackStart
                 : cursor.minusDays(overlapDays);
+        if (windowStart.isAfter(lookbackStart)) {
+            windowStart = lookbackStart;
+        }
         if (windowStart.isAfter(windowEnd)) {
             windowStart = windowEnd;
         }
@@ -226,6 +233,7 @@ public class RevenueStatementService {
                 healedKeys,
                 healFailed,
                 heal);
+        attachBalanceCheck(report, gateway, searchItem);
         return finish(persist, started, report, nextCursor);
     }
 
@@ -256,14 +264,62 @@ public class RevenueStatementService {
             report.put("cursorAdvanced", true);
             report.put("cursorAfter", nextCursor.toString());
         }
-        logger.info("[RevenueStatement] status={} lines={} missingInDb={} missingOnRubies={} unmatched={} healed={}",
+        logger.info("[RevenueStatement] status={} lines={} missingInDb={} missingOnRubies={} unmatched={} healed={} dbBalance={} rubiesAvailable={} balanceGap={} balancesMatch={}",
                 report.get("status"),
                 report.get("statementLines"),
                 report.get("missingInDb"),
                 report.get("missingOnRubies"),
                 report.get("unmatched"),
-                report.get("healed"));
+                report.get("healed"),
+                report.get("dbRevenueBalance"),
+                report.get("rubiesAvailableBalance"),
+                report.get("balanceGap"),
+                report.get("balancesMatch"));
         return report;
+    }
+
+    private void attachBalanceCheck(Map<String, Object> report, PaymentGateway gateway, String searchItem) {
+        Wallet fresh = walletRepository.findByRevenueWalletTrue().orElse(null);
+        BigDecimal db = fresh == null || fresh.getBalance() == null
+                ? BigDecimal.ZERO.setScale(2, java.math.RoundingMode.HALF_UP)
+                : fresh.getBalance().setScale(2, java.math.RoundingMode.HALF_UP);
+        report.put("dbRevenueBalance", db);
+        report.put("balanceRewritten", false);
+        BigDecimal rubies = readRubiesBalance(gateway, searchItem);
+        report.put("rubiesAvailableBalance", rubies);
+        if (rubies == null) {
+            report.put("balanceGap", null);
+            report.put("balancesMatch", false);
+            report.put("balanceNote", "The Rubies balance was not read on this pass.");
+            if ("OK".equals(report.get("status"))) {
+                report.put("status", "ATTENTION");
+            }
+            return;
+        }
+        BigDecimal gap = db.subtract(rubies).setScale(2, java.math.RoundingMode.HALF_UP);
+        boolean match = gap.abs().compareTo(new BigDecimal("0.01")) <= 0;
+        report.put("balanceGap", gap);
+        report.put("balancesMatch", match);
+        report.put("balanceNote", match
+                ? "The revenue wallet matches the Rubies available balance."
+                : "The revenue wallet does not match the Rubies available balance. "
+                + "The gap is a missing or double-counted line. The database balance was left as the sum of its rows.");
+        if (!match && "OK".equals(report.get("status"))) {
+            report.put("status", "ATTENTION");
+        }
+    }
+
+    private BigDecimal readRubiesBalance(PaymentGateway gateway, String searchItem) {
+        try {
+            Optional<BigDecimal> balance = gateway.fetchWalletBalance(searchItem);
+            if (balance == null || balance.isEmpty() || balance.get() == null) {
+                return null;
+            }
+            return balance.get().setScale(2, java.math.RoundingMode.HALF_UP);
+        } catch (RuntimeException ex) {
+            logger.warn("[RevenueStatement] Balance enquiry failed: {}", ex.getClass().getSimpleName());
+            return null;
+        }
     }
 
     private boolean applyHeal(Classified row) {
@@ -281,6 +337,18 @@ public class RevenueStatementService {
         if (row.outcome() == Outcome.MISSING_OPENING_FEE && row.openingFeeUserId() != null) {
             revenueClassificationService.recordWalletOpeningFee(row.openingFeeUserId(), "");
             return transactionLogRepository.existsByReference("WALLET-OPEN-" + row.openingFeeUserId());
+        }
+        if ((row.outcome() == Outcome.UNMATCHED || row.outcome() == Outcome.OPENING_FEE_UNATTRIBUTED)
+                && row.line() != null
+                && row.keyReference() != null) {
+            return revenueClassificationService.bookStatementMovement(
+                    row.keyReference(),
+                    row.line().direction() == RevenueStatementMatcher.Direction.CREDIT,
+                    row.line().amount(),
+                    row.line().narration(),
+                    row.line().counterpartyAccount(),
+                    row.line().counterpartyName(),
+                    row.line().occurredOn());
         }
         return false;
     }
@@ -347,7 +415,8 @@ public class RevenueStatementService {
         report.put("note", "Matched the revenue-account statement to the books. "
                 + "A healed airtime line adds only the margin. An opening fee is booked only for a named "
                 + "WALLET-OPEN or KYC-BVN line of the configured amount, on or after the cutoff. "
-                + "The revenue wallet balance is never replaced with the Rubies balance.");
+                + "Any other posted line is written once onto the revenue wallet. "
+                + "The Rubies available balance is compared afterwards and is never copied over the database.");
         return report;
     }
 

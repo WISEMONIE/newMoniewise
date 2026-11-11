@@ -145,6 +145,43 @@ class RevenueStatementServiceTest {
     }
 
     @Test
+    void unmatchedDebitIsBookedOnceAndTheRubiesBalanceIsOnlyCompared() {
+        statement(line("NIP-OUT-1", "DR", "500.00", "2026-10-19", "00"), false);
+        revenue.setBalance(new BigDecimal("7210.36"));
+        when(gateway.fetchWalletBalance(SECRET_ACCOUNT)).thenReturn(Optional.of(new BigDecimal("7210.36")));
+        when(revenueClassificationService.bookStatementMovement(
+                eq("NIP-OUT-1"), eq(false), eq(new BigDecimal("500.00")),
+                nullable(String.class), nullable(String.class), nullable(String.class), eq(LocalDate.of(2026, 10, 19))))
+                .thenReturn(true);
+
+        Map<String, Object> report = service.run(TODAY, true, true);
+
+        assertEquals(1, report.get("healed"));
+        assertEquals(false, report.get("balanceRewritten"));
+        assertEquals(true, report.get("balancesMatch"));
+        assertEquals(0, new BigDecimal(report.get("balanceGap").toString()).compareTo(BigDecimal.ZERO.setScale(2)));
+        assertEquals("The revenue wallet matches the Rubies available balance.", report.get("balanceNote"));
+        verify(walletRepository, never()).save(any());
+        assertFalse(String.valueOf(report).contains(SECRET_ACCOUNT));
+    }
+
+    @Test
+    void aRubiesGapStaysOnTheReportAndDoesNotReplaceTheWallet() {
+        statement(line("REV-" + SALE, "CR", "1000.00", "2026-10-19", "00"), false);
+        sale(true);
+        when(gateway.fetchWalletBalance(SECRET_ACCOUNT)).thenReturn(Optional.of(new BigDecimal("7000.00")));
+
+        Map<String, Object> report = service.run(TODAY, true, true);
+
+        assertEquals("ATTENTION", report.get("status"));
+        assertEquals(false, report.get("balancesMatch"));
+        assertEquals(false, report.get("balanceRewritten"));
+        assertEquals(0, revenue.getBalance().compareTo(new BigDecimal("7710.36")));
+        assertEquals(0, new BigDecimal(report.get("balanceGap").toString()).compareTo(new BigDecimal("710.36")));
+        assertFalse(String.valueOf(report).contains(SECRET_ACCOUNT));
+    }
+
+    @Test
     void historicalLineIsNotHealed() {
         statement(line("REV-" + SALE, "CR", "1000.00", "2026-10-17", "00"), false);
         sale(false);

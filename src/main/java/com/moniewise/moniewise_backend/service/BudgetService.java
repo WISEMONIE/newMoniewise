@@ -198,7 +198,12 @@ public class BudgetService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .setScale(2, RoundingMode.HALF_UP);
         BigDecimal totalNeeded = envelopeTotal.add(creationFee).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal walletBalance = walletService.checkBalance(user.getId()).setScale(2, RoundingMode.HALF_UP);
+        // A person can review a plan before a wallet exists. Treat that as ₦0
+        // so the journey can reach the funding step instead of failing closed.
+        BigDecimal walletBalance = walletRepository.findByUserId(user.getId())
+                .map(wallet -> wallet.getBalance() == null ? BigDecimal.ZERO : wallet.getBalance())
+                .orElse(BigDecimal.ZERO)
+                .setScale(2, RoundingMode.HALF_UP);
         BigDecimal shortfall = totalNeeded.subtract(walletBalance)
                 .max(BigDecimal.ZERO)
                 .setScale(2, RoundingMode.HALF_UP);
@@ -788,6 +793,10 @@ public class BudgetService {
     public BudgetResponse createBudget(BudgetRequest request, String email) {
         User user = userService.findByEmail(email);
         logger.debug("Starting budget creation for {}", email);
+
+        if (!walletRepository.existsByUser(user)) {
+            throw new IllegalArgumentException("A wallet is required before a budget can be created.");
+        }
 
         if (request.getTermsAccepted() != null && request.getTermsAccepted()
                 && !Boolean.TRUE.equals(user.getTncAccepted())) {

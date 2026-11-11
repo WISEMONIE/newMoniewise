@@ -96,6 +96,13 @@ public enum TransactionType {
     WALLET_OPEN_FEE,
 
     /**
+     * A posted line on the Rubies revenue-account statement that our own
+     * collections did not already explain: a transfer out, a Rubies charge,
+     * or an unknown credit. Platform-internal. Reference pattern: STMT-{rubies reference}.
+     */
+    REVENUE_STATEMENT_ENTRY,
+
+    /**
      * Refund of the budget creation fee when a scheduled budget is cancelled
      * before activation. User-visible — shows in Activity.
      * Reference pattern: BUD-FEE-REFUND-{budgetId}-{timestamp}

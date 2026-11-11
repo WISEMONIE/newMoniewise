@@ -40,10 +40,11 @@ public class ReconciliationScheduler {
     }
 
     /**
-     * 06:30 Lagos. Reads the revenue-account statement, stores a report, and
-     * books a known line when statement healing is on.
+     * Every 30 minutes, Lagos. Reads the revenue-account statement, books each
+     * new posted line once, compares the Rubies available balance, and stores
+     * the gap. It does not copy that balance onto the wallet.
      */
-    @Scheduled(cron = "${moniewise.reconciliation.revenue-wallet.cron:0 30 6 * * ?}", zone = "Africa/Lagos")
+    @Scheduled(cron = "${moniewise.reconciliation.revenue-wallet.cron:0 0/30 * * * ?}", zone = "Africa/Lagos")
     public void runRevenueWalletReconciliation() {
         if (!schedulerEnabled) {
             return;

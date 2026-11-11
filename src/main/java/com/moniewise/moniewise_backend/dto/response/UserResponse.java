@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.dto.response; // ✅ Correct Package
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.Role;
+import com.moniewise.moniewise_backend.utils.ProfileCompletion;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
@@ -58,10 +59,7 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
 
         this.profileData = pd;
 
-        String fn = pd.getOrDefault("firstName", "").toString();
-        String ln = pd.getOrDefault("lastName", "").toString();
-        this.needsProfileUpdate = isBlank(user.getPhone()) || isBlank(user.getBvn())
-                || isBlank(fn) || isBlank(ln);
+        this.needsProfileUpdate = ProfileCompletion.needsProfileUpdate(user);
 
         // 🛡️ Production Logic: Handle "Empty Shell" Users
         if (walletEntity != null) {

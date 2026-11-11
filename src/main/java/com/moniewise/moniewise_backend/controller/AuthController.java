@@ -20,6 +20,7 @@ import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.PasswordResetService;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.AccountDeletionService;
+import com.moniewise.moniewise_backend.utils.ProfileCompletion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -440,20 +441,7 @@ public class AuthController {
     }
 
     private boolean needsProfileUpdate(User user) {
-        Map<String, Object> profileData = user.getProfileData();
-        String firstName = readProfileValue(profileData, "firstName");
-        String lastName = readProfileValue(profileData, "lastName");
-        return isBlank(user.getPhone()) || isBlank(user.getBvn()) || isBlank(firstName) || isBlank(lastName);
-    }
-
-    private String readProfileValue(Map<String, Object> profileData, String key) {
-        if (profileData == null) return null;
-        Object value = profileData.get(key);
-        return value != null ? value.toString() : null;
-    }
-
-    private boolean isBlank(String value) {
-        return value == null || value.isBlank();
+        return ProfileCompletion.needsProfileUpdate(user);
     }
 
     private String extractBearerToken(String authHeader) {

@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
@@ -189,6 +190,94 @@ public class RevenueClassificationService {
         return RevenuePosition.explain(
                 dbRevenue, cost, margin, missingAmount, missingCount, actualRubies,
                 RevenuePosition.DEFAULT_TOLERANCE);
+    }
+
+    /**
+     * Writes one posted Rubies statement line onto the revenue wallet.
+     * A debit reduces the balance. A credit increases it. The same Rubies
+     * reference is never applied twice. This does not call Rubies.
+     *
+     * @return true when the row is stored, including when it was already stored
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean bookStatementMovement(String providerReference,
+                                         boolean credit,
+                                         BigDecimal amount,
+                                         String narration,
+                                         String counterpartyAccount,
+                                         String counterpartyName,
+                                         LocalDate occurredOn) {
+        String rubiesReference = providerReference == null ? "" : providerReference.trim();
+        if (rubiesReference.isBlank() || rubiesReference.length() > 80 || amount == null || amount.signum() <= 0) {
+            return false;
+        }
+        String reference = statementReference(rubiesReference);
+        if (transactionLogRepository.existsByReference(reference)
+                || transactionLogRepository.existsByProviderNameAndProviderReference("RUBIES", rubiesReference)) {
+            return true;
+        }
+
+        Wallet revenue = lockRevenueWallet();
+        if (revenue == null || revenue.getUser() == null || revenue.getUser().getId() == null) {
+            logger.error("[Revenue] Cannot book statement line {} — revenue wallet missing", rubiesReference);
+            return false;
+        }
+
+        BigDecimal movement = moneyOrZero(amount);
+        BigDecimal balance = revenue.getBalance() == null ? BigDecimal.ZERO : revenue.getBalance();
+        revenue.setBalance(credit ? balance.add(movement) : balance.subtract(movement));
+        revenue.setUpdatedAt(LocalDateTime.now());
+        walletRepository.save(revenue);
+
+        TransactionLog entry = new TransactionLog();
+        entry.setUserId(revenue.getUser().getId());
+        entry.setAmount(movement);
+        entry.setTransactionType(TransactionType.REVENUE_STATEMENT_ENTRY);
+        entry.setStatus(TransactionStatus.COMPLETED);
+        entry.setCreatedAt(occurredOn == null ? LocalDateTime.now() : occurredOn.atStartOfDay());
+        entry.setReference(reference);
+        entry.setProviderName("RUBIES");
+        entry.setProviderReference(rubiesReference);
+        entry.setDescription(statementDescription(credit, narration));
+        if (counterpartyAccount != null && !counterpartyAccount.isBlank()) {
+            entry.setExternalAccountNumber(trim(counterpartyAccount, 32));
+        }
+        if (counterpartyName != null && !counterpartyName.isBlank()) {
+            entry.setExternalAccountName(trim(counterpartyName, 120));
+        }
+        transactionLogRepository.save(entry);
+
+        RevenueLog revenueLog = new RevenueLog();
+        revenueLog.setUserId(revenue.getUser().getId());
+        revenueLog.setType(credit ? "rubies_statement_credit" : "rubies_statement_debit");
+        revenueLog.setAmount(movement);
+        revenueLog.setDescription(trim(reference + " " + entry.getDescription(), 255));
+        revenueLog.setCreatedAt(entry.getCreatedAt());
+        revenueLogRepository.save(revenueLog);
+
+        logger.info("[Revenue] Booked statement {} ref={} amount={}",
+                credit ? "credit" : "debit", rubiesReference, movement.toPlainString());
+        return true;
+    }
+
+    static String statementReference(String rubiesReference) {
+        return "STMT-" + rubiesReference.trim();
+    }
+
+    private static String statementDescription(boolean credit, String narration) {
+        String lead = credit ? "Rubies statement credit" : "Rubies statement debit";
+        if (narration == null || narration.isBlank()) {
+            return lead;
+        }
+        return trim(lead + ". " + narration.trim(), 240);
+    }
+
+    private static String trim(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
     }
 
     static String markupLogFragment(String purchaseRef) {
