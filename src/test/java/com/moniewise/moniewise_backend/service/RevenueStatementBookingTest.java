@@ -79,4 +79,22 @@ class RevenueStatementBookingTest {
         verify(walletRepository, times(1)).save(any());
         verify(revenueLogRepository, times(1)).save(any());
     }
+
+    @Test
+    void cashShortfallDropsTheRevenueWalletOnce() {
+        when(transactionLogRepository.existsByReference("STMT-CASH-SHORTFALL-2026-10-20-250.00"))
+                .thenReturn(false, true);
+
+        boolean first = service.bookCashShortfall(new BigDecimal("250.00"), LocalDate.of(2026, 10, 20));
+        boolean second = service.bookCashShortfall(new BigDecimal("250.00"), LocalDate.of(2026, 10, 20));
+
+        assertTrue(first);
+        assertEquals(false, second);
+        assertEquals(0, revenue.getBalance().compareTo(new BigDecimal("750.00")));
+        ArgumentCaptor<TransactionLog> saved = ArgumentCaptor.forClass(TransactionLog.class);
+        verify(transactionLogRepository, times(1)).save(saved.capture());
+        assertEquals("STMT-CASH-SHORTFALL-2026-10-20-250.00", saved.getValue().getReference());
+        assertEquals("Rubies cash shortfall", saved.getValue().getDescription());
+        verify(walletRepository, times(1)).save(any());
+    }
 }

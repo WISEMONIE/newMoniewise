@@ -166,18 +166,20 @@ class RevenueStatementServiceTest {
     }
 
     @Test
-    void aRubiesGapStaysOnTheReportAndDoesNotReplaceTheWallet() {
+    void aRevenueWalletAboveRubiesBooksTheShortfall() {
         statement(line("REV-" + SALE, "CR", "1000.00", "2026-10-19", "00"), false);
         sale(true);
         when(gateway.fetchWalletBalance(SECRET_ACCOUNT)).thenReturn(Optional.of(new BigDecimal("7000.00")));
+        when(revenueClassificationService.bookCashShortfall(new BigDecimal("710.36"), TODAY)).thenReturn(true);
 
         Map<String, Object> report = service.run(TODAY, true, true);
 
-        assertEquals("ATTENTION", report.get("status"));
-        assertEquals(false, report.get("balancesMatch"));
-        assertEquals(false, report.get("balanceRewritten"));
-        assertEquals(0, revenue.getBalance().compareTo(new BigDecimal("7710.36")));
-        assertEquals(0, new BigDecimal(report.get("balanceGap").toString()).compareTo(new BigDecimal("710.36")));
+        assertEquals("OK", report.get("status"));
+        assertEquals(true, report.get("balancesMatch"));
+        assertEquals(true, report.get("balanceRewritten"));
+        assertEquals(0, new BigDecimal(report.get("cashShortfall").toString()).compareTo(new BigDecimal("710.36")));
+        assertEquals(0, new BigDecimal(report.get("balanceGap").toString()).compareTo(BigDecimal.ZERO.setScale(2)));
+        verify(revenueClassificationService).bookCashShortfall(new BigDecimal("710.36"), TODAY);
         assertFalse(String.valueOf(report).contains(SECRET_ACCOUNT));
     }
 

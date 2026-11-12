@@ -194,7 +194,7 @@ public final class RevenueStatementMatcher {
         if (line.direction() == Direction.CREDIT) {
             return classifyCredit(line, lookup, healAfter);
         }
-        return classifyDebit(line, lookup, openingFee, healAfter);
+        return classifyDebit(line, lookup, openingFee);
     }
 
     private static Classified classifyCredit(Line line, Lookup lookup, LocalDate healAfter) {
@@ -215,7 +215,7 @@ public final class RevenueStatementMatcher {
         return done(line, Outcome.UNMATCHED, key(line), statementMovement(line), null, null);
     }
 
-    private static Classified classifyDebit(Line line, Lookup lookup, BigDecimal openingFee, LocalDate healAfter) {
+    private static Classified classifyDebit(Line line, Lookup lookup, BigDecimal openingFee) {
         Long userId = openingFeeUser(line);
         if (userId != null) {
             if (lookup.openingFeeRecorded(userId) || anyTransaction(line, lookup)) {
@@ -223,7 +223,7 @@ public final class RevenueStatementMatcher {
             }
             if (sameMoney(line.amount(), openingFee)) {
                 return done(line, Outcome.MISSING_OPENING_FEE, "WALLET-OPEN-" + userId,
-                        healable(line, healAfter), null, userId);
+                        line.occurredOn() != null, null, userId);
             }
             return done(line, Outcome.OPENING_FEE_AMOUNT_DIFFERS, "WALLET-OPEN-" + userId, false, null, userId);
         }

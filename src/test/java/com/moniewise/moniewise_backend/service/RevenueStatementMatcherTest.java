@@ -96,6 +96,15 @@ class RevenueStatementMatcherTest {
     }
 
     @Test
+    void namedOpeningFeeBeforeTheCutoffIsStillHealable() {
+        Classified row = classify(debit("WALLET-OPEN-9", "70.00", "2026-10-01"), lookup(SALE, false))
+                .lines().get(0);
+
+        assertEquals(Outcome.MISSING_OPENING_FEE, row.outcome());
+        assertTrue(row.healable());
+    }
+
+    @Test
     void namedOpeningFeeOfSeventyAfterTheCutoffIsHealable() {
         Classified row = classify(debit("WALLET-OPEN-9", "70.00", "2026-10-19"), lookup(SALE, false))
                 .lines().get(0);

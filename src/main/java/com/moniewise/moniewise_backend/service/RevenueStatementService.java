@@ -56,8 +56,9 @@ import java.util.Set;
  * books. A known airtime margin or named opening fee is booked as before.
  * Any other posted line with its own reference is written once onto the
  * revenue wallet, {@code transaction_logs}, and {@code revenue_logs}.
- * The Rubies available balance is then compared with that wallet. A gap is
- * stored on the run. The wallet balance is never replaced with the Rubies balance.
+ * The Rubies available balance is then compared with that wallet. When the
+ * database wallet is still above that cash, the difference is booked as one
+ * debit. The wallet is never raised up to the Rubies balance.
  *
  * <p>Healing is on unless {@code moniewise.reconciliation.revenue-statement.heal-enabled}
  * is set to false. An airtime credit books only the margin, and only on or
@@ -233,8 +234,46 @@ public class RevenueStatementService {
                 healedKeys,
                 healFailed,
                 heal);
+        String statusBeforeBalance = String.valueOf(report.get("status"));
         attachBalanceCheck(report, gateway, searchItem);
+        alignCashShortfall(report, today, heal, statement.get().truncated(), statusBeforeBalance);
         return finish(persist, started, report, nextCursor);
+    }
+
+    private void alignCashShortfall(Map<String, Object> report,
+                                    LocalDate today,
+                                    boolean heal,
+                                    boolean truncated,
+                                    String statusBeforeBalance) {
+        if (!heal || truncated) {
+            return;
+        }
+        if (number(report.get("healFailed")) > 0 || number(report.get("healableLeft")) > 0) {
+            return;
+        }
+        if (!(report.get("balanceGap") instanceof BigDecimal gap)
+                || gap.compareTo(new BigDecimal("0.01")) <= 0) {
+            return;
+        }
+        if (!revenueClassificationService.bookCashShortfall(gap, today)) {
+            return;
+        }
+        report.put("balanceRewritten", true);
+        report.put("cashShortfall", gap);
+        if (report.get("rubiesAvailableBalance") instanceof BigDecimal rubies) {
+            report.put("dbRevenueBalance", rubies);
+        }
+        report.put("balanceGap", BigDecimal.ZERO.setScale(2, java.math.RoundingMode.HALF_UP));
+        report.put("balancesMatch", true);
+        report.put("balanceNote",
+                "The revenue wallet was above the Rubies available balance. The difference was booked as a debit.");
+        if ("OK".equals(statusBeforeBalance)) {
+            report.put("status", "OK");
+        }
+    }
+
+    private static int number(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
     }
 
     private Map<String, Object> finish(boolean persist, LocalDateTime started, Map<String, Object> report, LocalDate nextCursor) {
@@ -416,7 +455,8 @@ public class RevenueStatementService {
                 + "A healed airtime line adds only the margin. An opening fee is booked only for a named "
                 + "WALLET-OPEN or KYC-BVN line of the configured amount, on or after the cutoff. "
                 + "Any other posted line is written once onto the revenue wallet. "
-                + "The Rubies available balance is compared afterwards and is never copied over the database.");
+                + "A database balance that is still above the Rubies available balance is then reduced by one debit. "
+                + "The wallet is not raised to the Rubies balance.");
         return report;
     }
 

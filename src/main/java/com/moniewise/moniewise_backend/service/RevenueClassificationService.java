@@ -260,6 +260,64 @@ public class RevenueClassificationService {
         return true;
     }
 
+    /**
+     * Debits the revenue wallet by the amount it still sits above the Rubies
+     * available balance. The same date and amount are stored once. This does
+     * not call Rubies and does not raise the wallet.
+     *
+     * @return true only when this call stored the debit
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean bookCashShortfall(BigDecimal excess, LocalDate asOf) {
+        if (asOf == null || excess == null || excess.compareTo(new BigDecimal("0.01")) <= 0) {
+            return false;
+        }
+        BigDecimal movement = moneyOrZero(excess);
+        if (movement.compareTo(new BigDecimal("0.01")) <= 0) {
+            return false;
+        }
+        String reference = "STMT-CASH-SHORTFALL-" + asOf + "-" + movement.toPlainString();
+        if (reference.length() > 80 || transactionLogRepository.existsByReference(reference)) {
+            return false;
+        }
+
+        Wallet revenue = lockRevenueWallet();
+        if (revenue == null || revenue.getUser() == null || revenue.getUser().getId() == null) {
+            logger.error("[Revenue] Cannot book cash shortfall — revenue wallet missing");
+            return false;
+        }
+        BigDecimal balance = revenue.getBalance() == null ? BigDecimal.ZERO : revenue.getBalance();
+        if (balance.compareTo(movement) < 0) {
+            return false;
+        }
+        revenue.setBalance(balance.subtract(movement));
+        revenue.setUpdatedAt(LocalDateTime.now());
+        walletRepository.save(revenue);
+
+        TransactionLog entry = new TransactionLog();
+        entry.setUserId(revenue.getUser().getId());
+        entry.setAmount(movement);
+        entry.setTransactionType(TransactionType.REVENUE_STATEMENT_ENTRY);
+        entry.setStatus(TransactionStatus.COMPLETED);
+        entry.setCreatedAt(asOf.atStartOfDay());
+        entry.setReference(reference);
+        entry.setProviderName("RUBIES");
+        entry.setProviderReference(reference);
+        entry.setDescription("Rubies cash shortfall");
+        transactionLogRepository.save(entry);
+
+        RevenueLog revenueLog = new RevenueLog();
+        revenueLog.setUserId(revenue.getUser().getId());
+        revenueLog.setType("rubies_cash_shortfall");
+        revenueLog.setAmount(movement);
+        revenueLog.setDescription(trim(reference + " Rubies cash shortfall", 255));
+        revenueLog.setCreatedAt(entry.getCreatedAt());
+        revenueLogRepository.save(revenueLog);
+
+        logger.info("[Revenue] Booked cash shortfall ref={} amount={}", reference, movement.toPlainString());
+        return true;
+    }
+
     static String statementReference(String rubiesReference) {
         return "STMT-" + rubiesReference.trim();
     }
