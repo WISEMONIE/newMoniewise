@@ -165,7 +165,8 @@ public class KycService {
         Optional<KycProfile> existing = kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(userId);
         if (existing.isPresent()
                 && Boolean.TRUE.equals(existing.get().isBvnVerified())
-                && KycProfile.KycStatus.VERIFIED.equals(existing.get().getKycStatus())) {
+                && KycProfile.KycStatus.VERIFIED.equals(existing.get().getKycStatus())
+                && bvn.equals(existing.get().getBvn())) {
             log.info("[KYC] BVN already verified for userId={} — returning cached result", userId);
             BvnVerificationResultDto cached = buildDtoFromProfile(existing.get());
             cached.setKycStatus(KycProfile.KycStatus.VERIFIED);
@@ -173,15 +174,9 @@ public class KycService {
             return cached;
         }
 
-        // ── Guard 2: cross-user BVN uniqueness ───────────────────────────────────
-        // A BVN is a national ID — one person, one BVN. If any OTHER user has already
-        // verified this exact BVN, reject immediately (no SecureWave call, no new row).
-        if (kycProfileRepository.existsByBvnAndUserIdNot(bvn, userId)) {
-            log.warn("[KYC] BVN {} is already registered to a different user — rejecting for userId={}", bvn, userId);
-            throw new IllegalArgumentException(
-                    "This BVN is already linked to another account. " +
-                    "If you believe this is an error, please contact support.");
-        }
+        // ── Guard 2: this BVN is already on an account ─────────────────────────
+        // Check our own records before SecureWave. A known BVN is not sent out.
+        rejectIfBvnOwnedBySomeoneElse(bvn, userId);
 
         // Delegate to SecureWave first. Rubies fallback needs name details, so
         // pass whatever verified/profile identity data we already have.
@@ -267,6 +262,27 @@ public class KycService {
             profile.setKycStatus(KycProfile.KycStatus.REJECTED);
             kycProfileRepository.save(profile);
         });
+    }
+
+    /**
+     * A BVN already stored on another account stops here. SecureWave is not called.
+     */
+    private void rejectIfBvnOwnedBySomeoneElse(String bvn, Long userId) {
+        Optional<User> owner = userRepository.findGlobalByBvn(bvn);
+        if (owner.isPresent()
+                && owner.get().getId() != null
+                && !owner.get().getId().equals(userId)) {
+            log.warn("[KYC] BVN already stored on another account — skipping provider for userId={}", userId);
+            if (owner.get().isDeleted()) {
+                throw new IllegalArgumentException(
+                        "This BVN is linked to a permanently closed account and can't be used to sign up again. Please contact support if you need help.");
+            }
+            throw new IllegalArgumentException("This BVN is already linked to another account.");
+        }
+        if (kycProfileRepository.existsByBvnAndUserIdNot(bvn, userId)) {
+            log.warn("[KYC] BVN already stored on another KYC profile — skipping provider for userId={}", userId);
+            throw new IllegalArgumentException("This BVN is already linked to another account.");
+        }
     }
 
     // ── Provider fallback ────────────────────────────────────────────────────
