@@ -12,6 +12,10 @@ RUN mvn -B clean package -Dmaven.test.skip=true
 # RUNTIME STAGE
 # -------------------------------------------------
 FROM eclipse-temurin:17-jre-alpine
+# PDFBox draws the receipt image with Java2D. Alpine has no font config
+# until these packages are installed, and without them the PNG render fails.
+RUN apk add --no-cache fontconfig ttf-dejavu
+ENV JAVA_TOOL_OPTIONS="-Djava.awt.headless=true"
 WORKDIR /app
 # Ensure this matches your actual JAR name from pom.xml
 COPY --from=build /app/target/moniewise-backend-0.0.1-SNAPSHOT.jar app.jar

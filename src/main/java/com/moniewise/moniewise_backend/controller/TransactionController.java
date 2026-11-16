@@ -5,12 +5,16 @@ import com.moniewise.moniewise_backend.dto.WithdrawalInitiationResponseDto;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
 import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
+import com.moniewise.moniewise_backend.receipt.ReceiptFile;
+import com.moniewise.moniewise_backend.receipt.ReceiptService;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
 import com.moniewise.moniewise_backend.service.TransactionService;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -29,6 +33,7 @@ public class TransactionController {
     @Autowired private UserService userService;
     @Autowired private WalletService walletService;
     @Autowired private AbuseProtectionService abuseProtectionService;
+    @Autowired private ReceiptService receiptService;
 
     @GetMapping
     public ResponseEntity<Page<TransactionListResponse>> getUserTransactions(
@@ -84,6 +89,28 @@ public class TransactionController {
 
         Long userId = getUserId(userDetails);
         return transactionService.getTransactionDetail(trans_id, userId);
+    }
+
+    /**
+     * The PDF is the slip. PNG is that same page. A missing transfer and a
+     * transfer owned by someone else are both not found.
+     */
+    @GetMapping("/{trans_id}/receipt")
+    public ResponseEntity<byte[]> downloadReceipt(
+            @PathVariable("trans_id") Long transId,
+            @RequestParam(name = "format", defaultValue = "pdf") String format,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        Long userId = getUserId(userDetails);
+        ReceiptFile file = receiptService.render(transId, userId, ReceiptService.pngFormat(format));
+        MediaType mediaType = file.filename().endsWith(".png")
+                ? MediaType.IMAGE_PNG
+                : MediaType.APPLICATION_PDF;
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .contentLength(file.bytes().length)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.filename() + "\"")
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(file.bytes());
     }
 
     /**

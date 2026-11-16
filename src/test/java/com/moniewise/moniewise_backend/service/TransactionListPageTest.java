@@ -65,8 +65,11 @@ class TransactionListPageTest {
                 userRepository,
                 transactionLogRepository,
                 envelopeRepository,
-                budgetRepository,
-                markupCalculatorService);
+                new TransactionPresentation(
+                        userRepository,
+                        envelopeRepository,
+                        budgetRepository,
+                        markupCalculatorService));
     }
 
     @Test

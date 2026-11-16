@@ -8,7 +8,6 @@ import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
-import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,8 +38,7 @@ public class TransactionService {
     private final UserRepository userRepository;
     private final TransactionLogRepository transactionLogRepo;
     private final EnvelopeRepository envelopeRepo;
-    private final BudgetRepository budgetRepo;
-    private final MarkupCalculatorService markupCalculatorService;
+    private final TransactionPresentation presentation;
 
     private static final Set<TransactionType> USER_VISIBLE_TYPES = Set.of(
             WALLET_DEPOSIT,
@@ -104,8 +102,7 @@ public class TransactionService {
             UserRepository userRepository,
             TransactionLogRepository transactionLogRepo,
             EnvelopeRepository envelopeRepo,
-            BudgetRepository budgetRepo,
-            MarkupCalculatorService markupCalculatorService
+            TransactionPresentation presentation
     ) {
         this.decisionEngineService = decisionEngineService;
         this.walletService = walletService;
@@ -114,8 +111,7 @@ public class TransactionService {
         this.userRepository = userRepository;
         this.transactionLogRepo = transactionLogRepo;
         this.envelopeRepo = envelopeRepo;
-        this.budgetRepo = budgetRepo;
-        this.markupCalculatorService = markupCalculatorService;
+        this.presentation = presentation;
     }
 
     @Transactional
@@ -462,283 +458,48 @@ public class TransactionService {
     }
 
     private String formatEnumName(TransactionType type) {
-        if (type == null) {
-            return "Transaction";
-        }
-        return type.name().charAt(0) + type.name().substring(1).toLowerCase().replace('_', ' ');
+        return TransactionPresentation.formatEnumName(type);
     }
 
     private String getCounterpartyName(TransactionLog transaction) {
-        if (transaction.getCounterpartyUserId() != null) {
-            return userRepository.findById(transaction.getCounterpartyUserId())
-                    .map(user -> {
-                        if (user.getProfileData() != null && user.getProfileData().containsKey("name")) {
-                            Object rawName = user.getProfileData().get("name");
-                            if (rawName instanceof String name && !name.isBlank()) {
-                                return name;
-                            }
-                        }
-                        if (user.getEmail() != null) {
-                            return user.getEmail().split("@")[0];
-                        }
-                        return "Wisemonie User";
-                    })
-                    .orElse("Wisemonie User");
-        }
-
-        if (transaction.getDescription() != null) {
-            if (transaction.getDescription().contains("Transfer to ")) {
-                return transaction.getDescription().replace("Transfer to ", "").trim();
-            }
-            if (transaction.getDescription().contains("Received from ")) {
-                return transaction.getDescription().replace("Received from ", "").trim();
-            }
-        }
-
-        return "Wisemonie User";
-    }
-
-    /**
-     * Older ENVELOPE_TO_EXTERNAL / WALLET_WITHDRAWAL rows were written before
-     * providerName was captured on the transaction log itself (a write-side
-     * gap now fixed in EnvelopeService / WalletService). For those legacy
-     * rows, fall back to the user's wallet provider — a user only ever has
-     * one BaaS provider, so this reliably recovers the correct value without
-     * needing a data migration.
-     */
-    private String resolveProviderName(TransactionLog transaction) {
-        String direct = transaction.getProviderName();
-        if (direct != null && !direct.isBlank()) {
-            return direct;
-        }
-        return userRepository.findById(transaction.getUserId())
-                .map(User::getWallet)
-                .map(Wallet::getProviderName)
-                .orElse(null);
+        return presentation.counterpartyName(transaction, TransactionPresentation.Names.SCREEN);
     }
 
     private TransactionDetailResponse mapToDetailResponse(TransactionLog transaction) {
-        String sourceName = getEnvelopeName(transaction.getSourceEnvelopeId());
-        String targetName = getEnvelopeName(transaction.getTargetEnvelopeId());
-        String budgetName = getBudgetName(transaction.getBudgetId());
-
-        boolean reversed = isReversedOrFailed(transaction.getStatus());
-        boolean debit = !reversed && isOutgoing(transaction.getTransactionType(), transaction.getAmount());
-        String direction = debit ? "OUT" : "IN";
-
-        BigDecimal absoluteAmount = transaction.getAmount().abs();
-        // txn.fee stores ONLY the Moniewise markup fee — the NIBSS NIP bank charge is
-        // deducted by Rubies at the BaaS level and is never persisted on the txn
-        // (settlement recalculates it the same way). For display we add it back so the
-        // fee shown here matches the total the user was charged on the acknowledgement
-        // screen (markup + NIP). The stored value is left untouched so revenue
-        // settlement keeps crediting only the markup. See ExternalTransferSettlementService.
-        BigDecimal fee = transaction.getFee() != null ? transaction.getFee() : BigDecimal.ZERO;
-        if ((transaction.getTransactionType() == ENVELOPE_TO_EXTERNAL
-                || transaction.getTransactionType() == WALLET_WITHDRAWAL)
-                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(resolveProviderName(transaction))) {
-            fee = fee.add(markupCalculatorService.calculateNipFee(absoluteAmount));
-        }
-        BigDecimal stampDuty = transaction.getStampDuty() != null ? transaction.getStampDuty() : BigDecimal.ZERO;
-        if (reversed) {
-            fee = BigDecimal.ZERO;
-            stampDuty = BigDecimal.ZERO;
-        }
-        BigDecimal netAmount = reversed ? absoluteAmount : (debit ? absoluteAmount.add(fee).add(stampDuty) : absoluteAmount.subtract(fee));
-
-        String sender;
-        String recipient;
-
-        switch (transaction.getTransactionType()) {
-            case BUDGET_ALLOCATION:
-                sender = "Main Wallet";
-                recipient = budgetName != null ? "Budget: " + budgetName : "Budget Envelopes";
-                break;
-            case BUDGET_CREATION_FEE:
-            case WALLET_WITHDRAWAL_FEE:
-            case WALLET_ENVELOPE_TRANSFER_FEE:
-                sender = "Main Wallet";
-                recipient = "Wisemonie Fee";
-                break;
-            case BUDGET_UNALLOCATED_REFUNDED:
-                sender = "Unallocated Funds";
-                recipient = "Main Wallet";
-                break;
-            case BUDGET_CREATION_FEE_REFUND:
-                sender = "Wisemonie Fee";
-                recipient = "Main Wallet";
-                break;
-            case WALLET_DEPOSIT:
-                sender = "External Transfer / Card";
-                recipient = "Main Wallet";
-                break;
-            case WALLET_WITHDRAWAL:
-            case ENVELOPE_TO_EXTERNAL:
-                sender = transaction.getTransactionType() == WALLET_WITHDRAWAL ? "Main Wallet" : sourceName;
-                // Prefer the resolved account name (V19+); fall back to legacy externalAccountId.
-                String extAccName = transaction.getExternalAccountName();
-                String extAccId   = transaction.getExternalAccountId();
-                recipient = (extAccName != null && !extAccName.isBlank()) ? extAccName
-                          : (extAccId  != null && !extAccId.isBlank())   ? extAccId
-                          : "External Account";
-                break;
-            case ENVELOPE_TO_ENVELOPE:
-                sender = sourceName;
-                recipient = targetName;
-                break;
-            case ENVELOPE_TO_USER:
-                sender = sourceName;
-                recipient = getCounterpartyName(transaction);
-                break;
-            case WALLET_TO_USER:
-                sender = "Main Wallet";
-                recipient = getCounterpartyName(transaction);
-                break;
-            case USER_TO_ENVELOPE:
-                sender = getCounterpartyName(transaction);
-                recipient = targetName;
-                break;
-            default:
-                sender = "MonieWise Account";
-                recipient = "MonieWise Account";
-                break;
-        }
-
-        String title = switch (transaction.getTransactionType()) {
-            case WALLET_DEPOSIT -> "Wallet funded";
-            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
-            case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
-            case ENVELOPE_TO_USER, WALLET_TO_USER -> "Sent to " + getCounterpartyName(transaction);
-            case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(transaction);
-            case BUDGET_CREATION_FEE -> "Budget creation fee";
-            case BUDGET_CREATION_FEE_REFUND -> "Creation fee refunded";
-            case WALLET_WITHDRAWAL_FEE -> "Withdrawal fee";
-            case WALLET_ENVELOPE_TRANSFER_FEE -> "Transfer fee";
-            case BUDGET_ALLOCATION -> "Allocated to budget";
-            case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
-            case VAS_PURCHASE -> reversed ? "Purchase reversed" : "Airtime & Data";
-            default -> formatEnumName(transaction.getTransactionType());
-        };
-
-        if (reversed) {
-            switch (transaction.getTransactionType()) {
-                case ENVELOPE_TO_EXTERNAL:
-                    sender = recipient;
-                    recipient = sourceName;
-                    title = "Transfer reversed";
-                    break;
-                case WALLET_WITHDRAWAL:
-                    sender = recipient;
-                    recipient = "Main Wallet";
-                    title = "Transfer reversed";
-                    break;
-                case WALLET_ENVELOPE_TRANSFER_FEE:
-                case WALLET_WITHDRAWAL_FEE:
-                    sender = "Wisemonie Fee";
-                    recipient = "Main Wallet";
-                    title = "Fee reversed";
-                    break;
-                case VAS_PURCHASE:
-                    sender = "Provider";
-                    recipient = sourceName;
-                    title = "Purchase reversed";
-                    break;
-                default:
-                    title = "Transaction reversed";
-                    break;
-            }
-        }
-
-        String reference = transaction.getReference() != null ? transaction.getReference() : "N/A";
-        String status = transaction.getStatus() != null ? transaction.getStatus().name() : "COMPLETED";
-
-        // For external bank transfers, surface the bank name as targetEnvelopeName so the
-        // hero card's "To" field shows the bank rather than "System".
-        boolean isExternalTransfer =
-                transaction.getTransactionType() == ENVELOPE_TO_EXTERNAL
-                || transaction.getTransactionType() == WALLET_WITHDRAWAL;
-        String effectiveTargetName = (isExternalTransfer
-                && transaction.getExternalBankName() != null
-                && !transaction.getExternalBankName().isBlank())
-                ? transaction.getExternalBankName()
-                : targetName;
-
-        // Resolve account number: prefer explicit externalAccountNumber (V19+),
-        // fall back to the legacy externalAccountId column.
-        String resolvedAccountNumber = (transaction.getExternalAccountNumber() != null
-                && !transaction.getExternalAccountNumber().isBlank())
-                ? transaction.getExternalAccountNumber()
-                : transaction.getExternalAccountId();
-
+        TransactionPresentation.Display display = presentation.describe(
+                transaction, TransactionPresentation.Names.SCREEN);
         return new TransactionDetailResponse(
                 transaction.getId(),
-                reference,
-                status,
-                direction,
-                title,
+                display.reference(),
+                display.status(),
+                display.direction(),
+                display.title(),
                 transaction.getDescription(),
-                absoluteAmount,
-                fee,
-                stampDuty,
-                netAmount,
-                sender,
-                recipient,
+                display.amount(),
+                display.fee(),
+                display.stampDuty(),
+                display.netAmount(),
+                display.sender(),
+                display.recipient(),
                 transaction.getTransactionType(),
                 transaction.getCreatedAt(),
                 transaction.getBudgetId(),
-                budgetName,
-                sourceName,
+                display.budgetName(),
+                display.sourceName(),
                 transaction.getSourceEnvelopeId(),
-                effectiveTargetName,
+                display.effectiveTargetName(),
                 transaction.getTargetEnvelopeId(),
                 transaction.getExternalAccountId(),
                 transaction.getExternalBankName(),
-                resolvedAccountNumber
+                display.accountNumber()
         );
     }
 
-    private String getEnvelopeName(Long envelopeId) {
-        if (envelopeId == null) {
-            return "System";
-        }
-        return envelopeRepo.findById(envelopeId)
-                .map(Envelope::getName)
-                .orElse("Unknown Envelope");
-    }
-
-    private String getBudgetName(Long budgetId) {
-        if (budgetId == null) {
-            return "No Budget";
-        }
-        return budgetRepo.findById(budgetId)
-                .map(Budget::getName)
-                .orElse("Unknown Budget");
-    }
-
     private boolean isOutgoing(TransactionType type, BigDecimal amount) {
-        if (amount != null && amount.compareTo(BigDecimal.ZERO) < 0) {
-            return true;
-        }
-        if (type == null) {
-            return false;
-        }
-        return switch (type) {
-            case ENVELOPE_DISBURSEMENT,
-                    ENVELOPE_TO_EXTERNAL,
-                    ENVELOPE_TO_ENVELOPE,
-                    ENVELOPE_TO_USER,
-                    WALLET_DEDUCTION,
-                    WALLET_WITHDRAWAL_FEE,
-                    WALLET_ENVELOPE_TRANSFER_FEE,
-                    BUDGET_CREATION_FEE,
-                    BUDGET_ALLOCATION,
-                    WALLET_WITHDRAWAL,
-                    VAS_PURCHASE -> true;
-            default -> false;
-        };
+        return TransactionPresentation.isOutgoing(type, amount);
     }
 
     private boolean isReversedOrFailed(TransactionStatus status) {
-        return status == TransactionStatus.REVERSED || status == TransactionStatus.FAILED;
+        return TransactionPresentation.isReversed(status);
     }
 }
