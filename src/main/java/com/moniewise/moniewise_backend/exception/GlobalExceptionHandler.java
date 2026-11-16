@@ -51,6 +51,18 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    @ExceptionHandler(BvnFallbackIdentityRequiredException.class)
+    public ResponseEntity<Map<String, Object>> handleBvnFallbackIdentity(
+            BvnFallbackIdentityRequiredException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "status", HttpStatus.CONFLICT.value(),
+                "code", BvnFallbackIdentityRequiredException.CODE,
+                "error", ex.getMessage(),
+                "message", ex.getMessage(),
+                "timestamp", LocalDateTime.now().toString()
+        ));
+    }
+
     @ExceptionHandler(OtpVerificationException.class)
     public ResponseEntity<Map<String, Object>> handleOtpVerificationException(OtpVerificationException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(

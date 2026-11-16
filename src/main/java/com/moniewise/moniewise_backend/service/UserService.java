@@ -937,7 +937,12 @@ public class UserService implements UserDetailsService {
             return;
         }
 
-        BvnVerificationResultDto result = kycService.verifyBvnWithProvider(user.getId(), user.getBvn());
+        BvnVerificationResultDto result = kycService.verifyBvnWithProvider(
+                user.getId(),
+                user.getBvn(),
+                request != null ? request.getFirstName() : null,
+                request != null ? request.getLastName() : null,
+                request != null && request.getDob() != null ? request.getDob().toString() : null);
 
         Map<String, Object> profileData = user.getProfileData() != null
                 ? new HashMap<>(user.getProfileData())

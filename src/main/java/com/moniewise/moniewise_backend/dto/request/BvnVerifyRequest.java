@@ -13,6 +13,12 @@ public class BvnVerifyRequest {
     @NotBlank(message = "BVN is required")
     @Pattern(regexp = "\\d{11}", message = "BVN must be exactly 11 digits")
     private String bvn;
-    // No phone / email fields — the backend reads those from the authenticated
-    // user's record (stored at signup).  The client only submits the BVN.
+
+    /**
+     * Sent only after SecureWave is unavailable. Rubies checks these against
+     * the BVN. A normal SecureWave success ignores them.
+     */
+    private String firstName;
+    private String lastName;
+    private String dateOfBirth;
 }

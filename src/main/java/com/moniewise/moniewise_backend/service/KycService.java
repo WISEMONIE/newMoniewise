@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.dto.KycProfileResponseDto;
 import com.moniewise.moniewise_backend.dto.PendingRegistrationData;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.entity.KycProfile;
+import com.moniewise.moniewise_backend.exception.BvnFallbackIdentityRequiredException;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.KycProfileRepository;
@@ -149,13 +150,17 @@ public class KycService {
      * Verifies the BVN via SecureWave, persists all returned identity data,
      * and marks the profile as VERIFIED.
      *
-     * <p>The email and phone sent to SecureWave are taken directly from the
-     * authenticated user's record (stored at signup) — the client only needs
-     * to submit the BVN itself.  Users are instructed during signup to provide
-     * the phone number and email that match their BVN registration.
+     * <p>The email and phone sent to SecureWave come from the account. The
+     * client sends the BVN first. First name, last name, and date of birth
+     * are used only when SecureWave is unavailable and Rubies has to check
+     * the BVN against that name.
      */
     @Transactional
-    public BvnVerificationResultDto verifyBvnWithProvider(Long userId, String bvn) {
+    public BvnVerificationResultDto verifyBvnWithProvider(Long userId,
+                                                         String bvn,
+                                                         String suppliedFirstName,
+                                                         String suppliedLastName,
+                                                         String suppliedDob) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
 
@@ -180,13 +185,14 @@ public class KycService {
 
         // Delegate to SecureWave first. Rubies fallback needs name details, so
         // pass whatever verified/profile identity data we already have.
+        KycProfile stored = existing.orElse(null);
         BvnVerificationResultDto result = verifyBvnWithSecureWaveFallback(
                 user.getEmail(),
                 user.getPhone(),
                 bvn,
-                identityFirstName(user, existing.orElse(null)),
-                identityLastName(user, existing.orElse(null)),
-                identityDob(user, existing.orElse(null)));
+                firstNonBlank(suppliedFirstName, identityFirstName(user, stored)),
+                firstNonBlank(suppliedLastName, identityLastName(user, stored)),
+                firstNonBlank(suppliedDob, identityDob(user, stored)));
 
         // ── Upsert: update existing row if one exists, never insert a second one ──
         KycProfile profile = existing.orElse(new KycProfile());
@@ -324,8 +330,8 @@ public class KycService {
         String cleanDob = clean(dob);
 
         if (cleanFirstName == null || cleanLastName == null) {
-            log.warn("[KYC] Rubies BVN fallback skipped because first/last name was not available.");
-            throw primaryError;
+            log.warn("[KYC] Rubies BVN fallback is waiting for the name on the BVN.");
+            throw new BvnFallbackIdentityRequiredException();
         }
 
         try {
@@ -336,6 +342,15 @@ public class KycService {
                     cleanLastName,
                     cleanDob,
                     reference);
+            if (clean(result.getFirstName()) == null) {
+                result.setFirstName(cleanFirstName);
+            }
+            if (clean(result.getLastName()) == null) {
+                result.setLastName(cleanLastName);
+            }
+            if (clean(result.getDateOfBirth()) == null && cleanDob != null) {
+                result.setDateOfBirth(cleanDob);
+            }
             log.info("[KYC] Rubies BVN fallback succeeded for reference={}", reference);
             return result;
         } catch (IllegalArgumentException rubiesRejection) {

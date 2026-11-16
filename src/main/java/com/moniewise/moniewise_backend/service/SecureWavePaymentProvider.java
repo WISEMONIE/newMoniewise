@@ -109,7 +109,7 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         } catch (HttpClientErrorException e) {
             log.error("[BVN] SecureWave rejected request — HTTP {}: {}", e.getStatusCode(), e.getResponseBodyAsString());
             String swMessage = extractSecureWaveMessage(e.getResponseBodyAsString());
-            throw new IllegalArgumentException(swMessage);
+            throw new IllegalArgumentException(swMessage, e);
         } catch (RuntimeException e) {
             throw e; // already wrapped, re-throw as-is
         } catch (Exception e) {

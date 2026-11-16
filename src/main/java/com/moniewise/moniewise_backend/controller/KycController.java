@@ -73,9 +73,14 @@ public class KycController {
             @AuthenticationPrincipal UserDetails userDetails,
             @Valid @RequestBody BvnVerifyRequest request) {
         Long userId = userService.getRequiredUserIdByEmail(userDetails.getUsername());
-        // email + phone come from the authenticated user's record — no need for
-        // the client to supply them.  Only the BVN is taken from the request body.
-        BvnVerificationResultDto result = kycService.verifyBvnWithProvider(userId, request.getBvn());
+        // email + phone come from the authenticated user's record. The client
+        // sends the BVN, and the name fields only when the fallback needs them.
+        BvnVerificationResultDto result = kycService.verifyBvnWithProvider(
+                userId,
+                request.getBvn(),
+                request.getFirstName(),
+                request.getLastName(),
+                request.getDateOfBirth());
         return ResponseEntity.ok(result);
     }
 }
