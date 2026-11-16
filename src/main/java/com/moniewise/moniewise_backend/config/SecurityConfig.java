@@ -135,7 +135,7 @@ public class SecurityConfig {
             configuration.setAllowedOrigins(origins);
         }
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Signature", "monnify-signature", "X-App-Platform", "X-App-Version", "X-App-Build"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Signature", "monnify-signature", "X-App-Platform", "X-App-Version", "X-App-Build", "X-Device-Id", "X-Device-Name"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
