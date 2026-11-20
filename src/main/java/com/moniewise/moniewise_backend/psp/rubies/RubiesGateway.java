@@ -267,7 +267,8 @@ public class RubiesGateway implements PaymentGateway {
         String firstName = normalizePersonName(str(profile, "bvnFirstName", ""));
         String lastName  = normalizePersonName(str(profile, "bvnLastName",  ""));
         // dob must be in YYYY-MM-DD format — Rubies validates this against the BVN record
-        String dob       = str(profile, "dateOfBirth", str(profile, "dob", ""));
+        String dob       = com.moniewise.moniewise_backend.utils.DateOfBirth.toIso(
+                str(profile, "dateOfBirth", str(profile, "dob", "")));
 
         if (isBlank(firstName) || isBlank(lastName) || isBlank(dob)) {
             logger.warn("[Rubies] Missing verified BVN identity fields for wallet creation. user={} firstNamePresent={} lastNamePresent={} dobPresent={}",
@@ -1001,6 +1002,8 @@ public class RubiesGateway implements PaymentGateway {
         }
         String normalized = message.toLowerCase(Locale.ROOT);
         return normalized.contains("name does not match")
+                || normalized.contains("names do not match")
+                || normalized.contains("name mismatch")
                 || normalized.contains("first name")
                 || normalized.contains("last name")
                 || normalized.contains("surname")

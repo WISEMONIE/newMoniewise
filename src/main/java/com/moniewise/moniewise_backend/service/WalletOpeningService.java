@@ -214,7 +214,8 @@ public class WalletOpeningService {
 
         putIfPresent(profile, "bvnFirstName", kyc.getFirstName());
         putIfPresent(profile, "bvnLastName", kyc.getLastName());
-        putIfPresent(profile, "dateOfBirth", kyc.getDateOfBirth());
+        putIfPresent(profile, "dateOfBirth",
+                com.moniewise.moniewise_backend.utils.DateOfBirth.toIso(kyc.getDateOfBirth()));
 
         if (isBlank(asText(profile.get("firstName"))) && !isBlank(kyc.getFirstName())
                 && !isBlank(kyc.getLastName())) {

@@ -102,6 +102,18 @@ class WalletOpeningServiceTest {
     }
 
     @Test
+    void sendsRubiesAnIsoDateOfBirth() {
+        verifiedKyc();
+        kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(USER_ID).orElseThrow()
+                .setDateOfBirth("Mar 19, 1998");
+        when(walletService.createWalletForUser(any(User.class))).thenReturn(wallet("2000002222"));
+
+        service.openFromVerifiedKyc(USER_ID);
+
+        assertEquals("1998-03-19", user.getProfileData().get("dateOfBirth"));
+    }
+
+    @Test
     void keepsADisplayNameTheUserAlreadyHas() {
         verifiedKyc();
         user.getProfileData().put("firstName", "Adaeze");
