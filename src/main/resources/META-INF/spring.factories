@@ -1,0 +1,3 @@
+# Runs right after Spring sets log levels, before any bean starts.
+org.springframework.context.ApplicationListener=\
+com.moniewise.moniewise_backend.config.SensitiveLoggingGuard
