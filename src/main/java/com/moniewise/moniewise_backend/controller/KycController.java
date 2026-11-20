@@ -87,10 +87,11 @@ public class KycController {
                 request.getLastName(),
                 request.getDateOfBirth());
         // A verified BVN opens the account in this same request, so the app
-        // closing or a dropped follow-up call cannot leave the user without
-        // one. A bank failure here does not fail the check: the profile call,
-        // the next wallet read and the retry job all try again.
-        walletOpeningService.tryOpenFromVerifiedKyc(userId, "BVN check");
+        // closing cannot leave the user without one. Saving the profile never
+        // opens an account. A bank failure here does not fail the check: the
+        // next wallet read and the retry job try again, and so does tapping
+        // "Try again" on the Open Wallet screen.
+        walletOpeningService.openAfterBvnCheck(userId);
         return ResponseEntity.ok(result);
     }
 }

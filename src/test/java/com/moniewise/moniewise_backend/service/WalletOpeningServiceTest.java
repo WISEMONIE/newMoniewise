@@ -172,6 +172,24 @@ class WalletOpeningServiceTest {
     }
 
     @Test
+    void theBvnCheckTriesEvenDuringAWait() {
+        verifiedKyc();
+        when(redisTemplate.hasKey(WalletOpeningService.HOLD_KEY + USER_ID)).thenReturn(true);
+        Wallet opened = wallet("2000004444");
+        when(walletService.createWalletForUser(any(User.class))).thenReturn(opened);
+
+        assertSame(opened, service.openAfterBvnCheck(USER_ID).orElseThrow());
+    }
+
+    @Test
+    void theBvnCheckNeverFailsBecauseOfTheBank() {
+        verifiedKyc();
+        when(walletService.createWalletForUser(any(User.class))).thenThrow(new RuntimeException("down"));
+
+        assertTrue(service.openAfterBvnCheck(USER_ID).isEmpty());
+    }
+
+    @Test
     void theSafeCallNeverThrows() {
         verifiedKyc();
         when(walletService.createWalletForUser(any(User.class))).thenThrow(new RuntimeException("down"));

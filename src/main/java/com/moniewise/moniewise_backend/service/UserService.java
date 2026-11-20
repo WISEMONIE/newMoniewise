@@ -84,10 +84,6 @@ public class UserService implements UserDetailsService {
     @Autowired
     @Lazy
     private UserService self;
-
-    @Autowired
-    @Lazy
-    private WalletOpeningService walletOpeningService;
     private final ObjectMapper objectMapper;
     private final ReferralService referralService;
 
@@ -707,8 +703,9 @@ public class UserService implements UserDetailsService {
     }
 
     public User updateProfile(String email, ProfileRequest request) {
+        // Saving a profile never opens a bank account. Accounts open only
+        // from the BVN check on the Open Wallet screen (WalletOpeningService).
         User saved = self.persistProfile(email, request);
-        openWalletIfRequested(saved, request);
         return userRepository.findById(saved.getId()).orElse(saved);
     }
 
@@ -881,70 +878,6 @@ public class UserService implements UserDetailsService {
         return savedUser;
     }
 
-    /**
-     * Runs after the profile transaction has committed, so a Rubies account
-     * can be stored even when a later step in this request fails.
-     */
-    private void openWalletIfRequested(User savedUser, ProfileRequest request) {
-        String incomingBvn = request.getBvn() != null ? request.getBvn().trim() : null;
-        if (incomingBvn != null && incomingBvn.isEmpty()) {
-            incomingBvn = null;
-        }
-        if (incomingBvn == null || savedUser.getId() == null || hasFundingAccount(savedUser.getId())) {
-            return;
-        }
-        // Makes sure the KYC profile is VERIFIED (cached when it already is),
-        // then opens from that profile, the same path the BVN check uses.
-        ensureVerifiedKycBeforeWalletCreation(savedUser, request);
-        walletOpeningService.openFromVerifiedKyc(savedUser.getId());
-    }
-
-    private boolean hasFundingAccount(Long userId) {
-        return walletRepository.findByUserId(userId)
-                .map(wallet -> {
-                    String number = wallet.getAccountNumber();
-                    return number != null && number.trim().matches("\\d{10}");
-                })
-                .orElse(false);
-    }
-
-    private void ensureVerifiedKycBeforeWalletCreation(User user, ProfileRequest request) {
-        if (user == null || user.getId() == null || user.getBvn() == null || user.getBvn().isBlank()) {
-            return;
-        }
-
-        BvnVerificationResultDto result = kycService.verifyBvnWithProvider(
-                user.getId(),
-                user.getBvn(),
-                request != null ? request.getFirstName() : null,
-                request != null ? request.getLastName() : null,
-                request != null && request.getDob() != null ? request.getDob().toString() : null);
-
-        Map<String, Object> profileData = user.getProfileData() != null
-                ? new HashMap<>(user.getProfileData())
-                : new HashMap<>();
-
-        String firstName = firstNonBlank(
-                result.getFirstName(),
-                request != null ? request.getFirstName() : null,
-                stringValue(profileData.get("firstName")));
-        String lastName = firstNonBlank(
-                result.getLastName(),
-                request != null ? request.getLastName() : null,
-                stringValue(profileData.get("lastName")));
-        String dob = firstNonBlank(
-                result.getDateOfBirth(),
-                request != null && request.getDob() != null ? request.getDob().toString() : null,
-                stringValue(profileData.get("dateOfBirth")));
-
-        putIfPresent(profileData, "bvnFirstName", firstName);
-        putIfPresent(profileData, "bvnLastName", lastName);
-        putIfPresent(profileData, "dateOfBirth", dob);
-
-        user.setProfileData(profileData);
-        userRepository.save(user);
-    }
-
     private void syncProvidusCustomerProfileIfEnabled(User user, ProfileRequest request) {
         if (!providusExpressGateway.isEnabled()) {
             return;
@@ -981,27 +914,10 @@ public class UserService implements UserDetailsService {
         }
     }
 
-    private String firstNonBlank(String... values) {
-        for (String value : values) {
-            String clean = stringValue(value);
-            if (clean != null) {
-                return clean;
-            }
-        }
-        return null;
-    }
-
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
 
-    private String stringValue(Object value) {
-        if (value == null) {
-            return null;
-        }
-        String text = value.toString().trim();
-        return text.isBlank() ? null : text;
-    }
 //    @Transactional
 //    public User updateProfile(String email, ProfileRequest request) {
 //        User user = findByEmail(email);

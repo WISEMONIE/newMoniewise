@@ -119,6 +119,24 @@ public class WalletOpeningService {
     }
 
     /**
+     * Called by the BVN check on the Open Wallet screen, the one place a user
+     * asks for an account. It tries even during a wait after a failure,
+     * because the user tapped for it. It never fails the BVN check: the app
+     * reads the wallet next and shows "try again" if there is none.
+     */
+    public Optional<Wallet> openAfterBvnCheck(Long userId) {
+        if (userId == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(openFromVerifiedKyc(userId));
+        } catch (RuntimeException e) {
+            logger.warn("[WalletOpen] BVN check could not open a wallet for user={}: {}", userId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Same as {@link #openFromVerifiedKyc} for callers that must not fail,
      * such as the BVN check and the wallet read. Skips users on hold after a
      * recent failure, so a busy screen does not keep calling the bank.
