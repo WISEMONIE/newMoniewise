@@ -84,6 +84,10 @@ public class UserService implements UserDetailsService {
     @Autowired
     @Lazy
     private UserService self;
+
+    @Autowired
+    @Lazy
+    private WalletOpeningService walletOpeningService;
     private final ObjectMapper objectMapper;
     private final ReferralService referralService;
 
@@ -889,38 +893,10 @@ public class UserService implements UserDetailsService {
         if (incomingBvn == null || savedUser.getId() == null || hasFundingAccount(savedUser.getId())) {
             return;
         }
+        // Makes sure the KYC profile is VERIFIED (cached when it already is),
+        // then opens from that profile, the same path the BVN check uses.
         ensureVerifiedKycBeforeWalletCreation(savedUser, request);
-        User fresh = userRepository.findById(savedUser.getId()).orElse(savedUser);
-        Wallet newWallet = walletService.createWalletForUser(fresh);
-        activationJourneyNudgeService.nudgeAfterWalletCreated(fresh.getId());
-
-        String welcomeFirstName = "";
-        try {
-            if (fresh.getProfileData() != null) {
-                Object nameObj = fresh.getProfileData().get("name");
-                if (nameObj != null) {
-                    String fullName = nameObj.toString().trim();
-                    welcomeFirstName = fullName.contains(" ")
-                            ? fullName.substring(0, fullName.indexOf(" "))
-                            : fullName;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        final String finalFirstName = welcomeFirstName;
-        CompletableFuture.runAsync(() -> {
-            try {
-                notificationService.sendWelcomeEmail(
-                        fresh.getEmail(),
-                        finalFirstName,
-                        newWallet.getAccountNumber(),
-                        newWallet.getBankName(),
-                        newWallet.getBalance()
-                );
-            } catch (Exception e) {
-                logger.error("Failed to send welcome email to {}: {}", fresh.getEmail(), e.getMessage());
-            }
-        });
+        walletOpeningService.openFromVerifiedKyc(savedUser.getId());
     }
 
     private boolean hasFundingAccount(Long userId) {

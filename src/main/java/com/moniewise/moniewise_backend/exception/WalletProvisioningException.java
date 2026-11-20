@@ -22,6 +22,26 @@ public class WalletProvisioningException extends RuntimeException {
         this.status = status;
     }
 
+    public static final String OPENING_IN_PROGRESS = "WALLET_OPENING_IN_PROGRESS";
+
+    public static WalletProvisioningException openingInProgress() {
+        return new WalletProvisioningException(
+                OPENING_IN_PROGRESS,
+                "Your wallet is being opened. Check again in a moment.",
+                null,
+                HttpStatus.CONFLICT
+        );
+    }
+
+    public static WalletProvisioningException phoneRequired() {
+        return new WalletProvisioningException(
+                "WALLET_PHONE_REQUIRED",
+                "Add your phone number to your profile before we open your wallet.",
+                null,
+                HttpStatus.BAD_REQUEST
+        );
+    }
+
     public static WalletProvisioningException missingVerifiedKycData() {
         return new WalletProvisioningException(
                 "WALLET_KYC_REQUIRED",

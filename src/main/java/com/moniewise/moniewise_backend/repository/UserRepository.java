@@ -48,6 +48,29 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query(value = "SELECT * FROM users WHERE bvn = :bvn ORDER BY created_at ASC LIMIT 1", nativeQuery = true)
     Optional<User> findGlobalByBvn(@Param("bvn") String bvn);
 
+    /**
+     * Users whose BVN is verified but who still have no 10-digit account.
+     * Read by the wallet-opening retry job.
+     */
+    @Query(value = """
+            SELECT u.id
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND COALESCE(w.is_revenue_wallet, false) = false
+              AND EXISTS (
+                    SELECT 1 FROM kyc_profiles k
+                    WHERE k.user_id = u.id
+                      AND k.bvn_verified = true
+                      AND k.kyc_status = 'VERIFIED')
+              AND (w.id IS NULL
+                   OR w.account_number IS NULL
+                   OR w.account_number !~ '^[0-9]{10}$')
+            ORDER BY u.id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Long> findVerifiedUserIdsWithoutFundingAccount(@Param("limit") int limit);
+
 //     ✅ FIXED: Native Query (Bypasses Hibernate HQL parser errors)
 //     Uses Postgres JSON operator (->>) to extract text directly.
 //     Note: We provide a countQuery to ensure pagination works efficiently.

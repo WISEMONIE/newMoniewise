@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.dto.request.BvnVerifyRequest;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.service.KycService;
 import com.moniewise.moniewise_backend.service.UserService;
+import com.moniewise.moniewise_backend.service.WalletOpeningService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -19,10 +20,14 @@ public class KycController {
 
     private final KycService kycService;
     private final UserService userService;
+    private final WalletOpeningService walletOpeningService;
 
-    public KycController(KycService kycService, UserService userService) {
+    public KycController(KycService kycService,
+                         UserService userService,
+                         WalletOpeningService walletOpeningService) {
         this.kycService = kycService;
         this.userService = userService;
+        this.walletOpeningService = walletOpeningService;
     }
 
     /**
@@ -81,6 +86,11 @@ public class KycController {
                 request.getFirstName(),
                 request.getLastName(),
                 request.getDateOfBirth());
+        // A verified BVN opens the account in this same request, so the app
+        // closing or a dropped follow-up call cannot leave the user without
+        // one. A bank failure here does not fail the check: the profile call,
+        // the next wallet read and the retry job all try again.
+        walletOpeningService.tryOpenFromVerifiedKyc(userId, "BVN check");
         return ResponseEntity.ok(result);
     }
 }

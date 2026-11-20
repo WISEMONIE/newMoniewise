@@ -526,13 +526,59 @@ public class WalletService {
             if (existing.isPresent() && hasFundingAccountNumber(existing.get())) {
                 return existing.get();
             }
-            PaymentGateway gateway = paymentGatewayResolver.resolveDefault();
-            Map<String, String> virtualAccount = gateway.createVirtualAccount(user);
-            String accountNumber = virtualAccount.get("accountNumber");
-            if (accountNumber == null || !accountNumber.trim().matches("\\d{10}")) {
-                throw new IllegalStateException("Wallet provider did not return an account number");
+            // The in-memory lock covers one server. This one covers every
+            // server, so two instances never ask Rubies for two accounts.
+            String openingKey = WALLET_OPENING_LOCK_PREFIX + user.getId();
+            boolean heldInRedis = acquireOpeningLock(openingKey);
+            try {
+                existing = walletRepository.findByUserId(user.getId());
+                if (existing.isPresent() && hasFundingAccountNumber(existing.get())) {
+                    return existing.get();
+                }
+                PaymentGateway gateway = paymentGatewayResolver.resolveDefault();
+                Map<String, String> virtualAccount = gateway.createVirtualAccount(user);
+                String accountNumber = virtualAccount.get("accountNumber");
+                if (accountNumber == null || !accountNumber.trim().matches("\\d{10}")) {
+                    throw new IllegalStateException("Wallet provider did not return an account number");
+                }
+                Wallet saved = self.saveOpenedWallet(user.getId(), virtualAccount, gateway.getProviderName());
+                evictWalletCache(user.getId());
+                return saved;
+            } finally {
+                if (heldInRedis) {
+                    releaseOpeningLock(openingKey);
+                }
             }
-            return self.saveOpenedWallet(user.getId(), virtualAccount, gateway.getProviderName());
+        }
+    }
+
+    private static final String WALLET_OPENING_LOCK_PREFIX = "wallet:opening:";
+    private static final java.time.Duration WALLET_OPENING_LOCK_TTL = java.time.Duration.ofMinutes(2);
+
+    /**
+     * Returns true when this call holds the lock. Throws when another server
+     * is opening the same account. If Redis is unreachable, the in-memory
+     * lock still applies and opening goes ahead.
+     */
+    private boolean acquireOpeningLock(String key) {
+        Boolean acquired;
+        try {
+            acquired = redisTemplate.opsForValue().setIfAbsent(key, "1", WALLET_OPENING_LOCK_TTL);
+        } catch (Exception e) {
+            logger.warn("[WalletOpen] Redis lock unavailable for {}: {}", key, e.getMessage());
+            return false;
+        }
+        if (Boolean.FALSE.equals(acquired)) {
+            throw com.moniewise.moniewise_backend.exception.WalletProvisioningException.openingInProgress();
+        }
+        return Boolean.TRUE.equals(acquired);
+    }
+
+    private void releaseOpeningLock(String key) {
+        try {
+            redisTemplate.delete(key);
+        } catch (Exception e) {
+            logger.debug("[WalletOpen] Could not release {}: {}", key, e.getMessage());
         }
     }
 

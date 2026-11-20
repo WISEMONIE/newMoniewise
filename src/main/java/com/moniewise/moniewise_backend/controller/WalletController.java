@@ -40,6 +40,9 @@ public class WalletController {
     private final AuthenticatedUserHolder userHolder;
     private final FeeReserveService feeReserveService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.moniewise.moniewise_backend.service.WalletOpeningService walletOpeningService;
+
     public WalletController(WalletService walletService,
                             UserService userService,
                             AbuseProtectionService abuseProtectionService,
@@ -63,7 +66,7 @@ public class WalletController {
         User user = currentUser(authentication.getName());
         Long userId = user.getId();
 
-        Wallet wallet = walletService.getWalletByUserId(userId);
+        Wallet wallet = walletWithAccount(userId);
         BigDecimal totalHoldings = walletService.getTotalHoldings(userId);
 
         return ResponseEntity.ok(new WalletResponse(
@@ -77,6 +80,25 @@ public class WalletController {
                 wallet.getProviderName(),
                 totalHoldings
         ));
+    }
+
+    /**
+     * The app reads this before any money action. A user with a verified BVN
+     * and no account gets one here, without typing the BVN again.
+     */
+    private Wallet walletWithAccount(Long userId) {
+        Wallet wallet;
+        try {
+            wallet = walletService.getWalletByUserId(userId);
+        } catch (IllegalArgumentException missing) {
+            return walletOpeningService.tryOpenFromVerifiedKyc(userId, "Wallet read")
+                    .orElseThrow(() -> missing);
+        }
+        String number = wallet.getAccountNumber();
+        if (number == null || !number.trim().matches("\\d{10}")) {
+            return walletOpeningService.tryOpenFromVerifiedKyc(userId, "Wallet read").orElse(wallet);
+        }
+        return wallet;
     }
 
     @GetMapping("/bank-info")

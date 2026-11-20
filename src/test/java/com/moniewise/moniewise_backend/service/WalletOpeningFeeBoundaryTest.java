@@ -128,4 +128,23 @@ class WalletOpeningFeeBoundaryTest {
         assertEquals("RUBIES", created.getProviderName());
         verify(revenueClassificationService).recordWalletOpeningFee(9L, "2000001111");
     }
+
+    @Test
+    void anotherServerAlreadyOpeningStopsASecondBankCall() {
+        User user = new User();
+        user.setId(10L);
+        @SuppressWarnings("unchecked")
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+                mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(walletRepository.findByUserId(10L)).thenReturn(java.util.Optional.empty());
+        when(redisTemplate.opsForValue()).thenReturn(ops);
+        when(ops.setIfAbsent(eq("wallet:opening:10"), eq("1"), any(java.time.Duration.class))).thenReturn(false);
+
+        com.moniewise.moniewise_backend.exception.WalletProvisioningException e = org.junit.jupiter.api.Assertions.assertThrows(
+                com.moniewise.moniewise_backend.exception.WalletProvisioningException.class,
+                () -> walletService.createWalletForUser(user));
+
+        assertEquals("WALLET_OPENING_IN_PROGRESS", e.getCode());
+        verify(paymentGatewayResolver, org.mockito.Mockito.never()).resolveDefault();
+    }
 }
