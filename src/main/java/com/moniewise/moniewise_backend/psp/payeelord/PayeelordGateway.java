@@ -39,7 +39,7 @@ import java.nio.charset.StandardCharsets;
  * <h3>This integration is SYNCHRONOUS</h3>
  * Per Payeelord's own integration notes: <em>"A transaction webhook fires only
  * after the purchase endpoint returns its JSON response."</em> The HTTP response
- * from {@code /buy/airtime} / {@code /buy/data} is the source of truth; the webhook
+ * from {@code /buy/airtime} / {@code /api/data} is the source of truth; the webhook
  * (see {@link #validateWebhookSignature}) is a secondary audit confirmation only.
  *
  * <h3>Configuration — set these in the Render dashboard, no Postman needed</h3>
@@ -181,7 +181,7 @@ public class PayeelordGateway {
     // ── Data purchase ─────────────────────────────────────────────────────────
 
     /**
-     * Calls {@code POST /buy/data}. SYNCHRONOUS — same authoritative-response and
+     * Calls {@code POST /api/data}. SYNCHRONOUS — same authoritative-response and
      * ambiguous-outcome semantics as {@link #purchaseAirtime}.
      *
      * @param networkId Payeelord's numeric network id from the catalog (1=MTN, 2=GLO, 3=9MOBILE, 4=AIRTEL)
@@ -189,7 +189,7 @@ public class PayeelordGateway {
      * @param mobileNumber recipient line
      */
     public PayeelordDataPurchaseResponse purchaseData(String networkId, String dataId, String dataType, String mobileNumber) {
-        String url = baseUrl() + "/buy/data";
+        String url = baseUrl() + "/data";
 
         PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, dataType, mobileNumber);
 
