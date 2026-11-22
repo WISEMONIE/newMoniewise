@@ -189,7 +189,7 @@ public class PayeelordGateway {
      * @param mobileNumber recipient line
      */
     public PayeelordDataPurchaseResponse purchaseData(String networkId, String dataId, String dataType, String mobileNumber) {
-        String url = baseUrl() + "/data";
+        String url = baseUrl() + "/buy/data";
 
         PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, dataType, mobileNumber);
 
@@ -494,7 +494,8 @@ public class PayeelordGateway {
         int code = e.getStatusCode().value();
         // 422 = Payeelord float balance insufficient — request was received and rejected cleanly,
         // the purchase definitely did NOT execute, safe to refund.
-        return code == 400 || code == 401 || code == 403 || code == 422;
+        // 404 = the address does not exist, so the purchase handler never ran.
+        return code == 400 || code == 401 || code == 403 || code == 404 || code == 422;
     }
 
     /**

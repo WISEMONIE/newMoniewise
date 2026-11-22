@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 
 /**
- * Wire response from {@code POST /api/data} — synchronous source-of-truth for the
+ * Wire response from {@code POST /api/buy/data} — synchronous source-of-truth for the
  * data purchase (see {@link PayeelordAirtimePurchaseResponse} for the envelope
  * rationale, which applies identically here).
  *
