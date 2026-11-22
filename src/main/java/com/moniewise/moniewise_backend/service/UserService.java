@@ -298,7 +298,7 @@ public class UserService implements UserDetailsService {
         user.setCreatedAt(LocalDateTime.now());
         user.setTncAccepted(false);
 
-        // Carry across BVN if the pre-verify step was completed during signup
+        // Older pending signups may already hold a BVN. New signups do not.
         if (pending.getBvn() != null && !pending.getBvn().isBlank()) {
             Optional<User> bvnOwner = userRepository.findGlobalByBvn(pending.getBvn());
             if (bvnOwner.isPresent() && !bvnOwner.get().getId().equals(user.getId())) {

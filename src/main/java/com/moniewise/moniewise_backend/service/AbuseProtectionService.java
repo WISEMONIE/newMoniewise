@@ -85,10 +85,6 @@ public class AbuseProtectionService {
     // ── Blog admin ─────────────────────────────────────────────────────────────
     public static final String BLOG_LOGIN = "auth.blog_login";
 
-    // ── KYC / BVN ─────────────────────────────────────────────────────────────
-    /** Public pre-verify step during signup — 3 attempts per 10 min before lockout. */
-    public static final String BVN_PRE_VERIFY = "kyc.bvn_pre_verify";
-
     private final StringRedisTemplate redis;
 
     public AbuseProtectionService(StringRedisTemplate redis) {
@@ -236,10 +232,6 @@ public class AbuseProtectionService {
 
             // Blog admin login — tighter than normal login: only admins should ever call this
             case BLOG_LOGIN -> new AttemptPolicy(3, Duration.ofMinutes(15), Duration.ofMinutes(30));
-
-            // KYC / BVN — tight: 3 attempts per window, 10-minute lockout
-            // Each call hits SecureWave; abuse wastes real money and is an enumeration risk
-            case BVN_PRE_VERIFY -> new AttemptPolicy(3, Duration.ofMinutes(10), Duration.ofMinutes(10));
 
             // Safe fallback
             default -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(15));

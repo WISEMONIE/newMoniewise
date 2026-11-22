@@ -2,7 +2,6 @@ package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.dto.KycProfileRequestDto;
 import com.moniewise.moniewise_backend.dto.KycProfileResponseDto;
-import com.moniewise.moniewise_backend.dto.PendingRegistrationData;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.entity.KycProfile;
 import com.moniewise.moniewise_backend.exception.BvnFallbackIdentityRequiredException;
@@ -31,7 +30,6 @@ public class KycService {
     private final UserRepository userRepository;
     private final SecureWavePaymentProvider secureWavePaymentProvider;
     private final RubiesGateway rubiesGateway;
-    private final RegistrationCacheService registrationCacheService;
 
     @Value("${moniewise.kyc.rubies-fallback.enabled:true}")
     private boolean rubiesBvnFallbackEnabled;
@@ -40,14 +38,12 @@ public class KycService {
             KycProfileRepository kycProfileRepository,
             UserRepository userRepository,
             SecureWavePaymentProvider secureWavePaymentProvider,
-            RubiesGateway rubiesGateway,
-            RegistrationCacheService registrationCacheService
+            RubiesGateway rubiesGateway
     ) {
         this.kycProfileRepository = kycProfileRepository;
         this.userRepository = userRepository;
         this.secureWavePaymentProvider = secureWavePaymentProvider;
         this.rubiesGateway = rubiesGateway;
-        this.registrationCacheService = registrationCacheService;
     }
 
     // ── Profile CRUD ──────────────────────────────────────────────────────────
@@ -64,71 +60,6 @@ public class KycService {
         profile.setSourceOfWealth(request.getSourceOfWealth());
         KycProfile saved = kycProfileRepository.save(profile);
         return mapToResponse(saved);
-    }
-
-    // ── Public (pre-auth) BVN pre-verification — called during signup ─────────
-
-    /**
-     * Verifies a BVN via SecureWave <b>before</b> the user has a JWT, i.e.
-     * during the signup flow.
-     *
-     * <ol>
-     *   <li>Looks up the in-progress pending registration in Redis by {@code phone}
-     *       to obtain the email address (which SecureWave requires).</li>
-     *   <li>Calls the SecureWave BVN verification API.</li>
-     *   <li>Writes the result back into the same Redis pending-registration key
-     *       so it is available when the OTP is later verified and the user is
-     *       persisted to PostgreSQL.</li>
-     *   <li>Returns the structured result DTO to the client.</li>
-     * </ol>
-     *
-     * @param phone the phone submitted during signup (step 1)
-     * @param bvn   the 11-digit BVN to verify
-     * @return the full {@link BvnVerificationResultDto} from SecureWave
-     * @throws IllegalArgumentException if no pending registration exists for
-     *                                  this phone (user must call /auth/signup first)
-     * @throws RuntimeException         if SecureWave rejects the BVN
-     */
-    public BvnVerificationResultDto preVerifyBvn(String phone, String bvn) {
-        return preVerifyBvn(phone, bvn, null, null, null);
-    }
-
-    public BvnVerificationResultDto preVerifyBvn(String phone,
-                                                 String bvn,
-                                                 String firstName,
-                                                 String lastName,
-                                                 String dob) {
-        // 1. Guard: must have a pending registration — proves phone was submitted
-        //    during /auth/signup and prevents anonymous BVN enumeration
-        PendingRegistrationData pending = registrationCacheService
-                .findByPhone(phone)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "No pending registration found for this phone. " +
-                        "Please complete the signup step first."));
-
-        // 1b. Block re-registration with a BVN that belongs to a deleted account
-        Optional<User> bvnOwner = userRepository.findGlobalByBvn(bvn);
-        if (bvnOwner.isPresent()) {
-            if (bvnOwner.get().isDeleted()) {
-                throw new IllegalArgumentException("This BVN is linked to a permanently closed account and can't be used to sign up again. Please contact support if you need help.");
-            }
-            throw new IllegalArgumentException("This BVN is already linked to another account.");
-        }
-
-        String email = pending.getEmail();
-
-        // 2. Call SecureWave first; Rubies is only an outage fallback.
-        BvnVerificationResultDto result = verifyBvnWithSecureWaveFallback(
-                email, phone, bvn, firstName, lastName, dob);
-
-        // 3. Persist BVN data back into the Redis pending record so it is
-        //    available when the OTP is verified and the User is created
-        pending.setBvn(bvn);
-        pending.setBvnVerificationResult(result);
-        registrationCacheService.save(pending); // overwrites the existing key, preserving the TTL reset
-
-        log.info("[KYC] BVN pre-verify complete for email={} — cached in pending registration", email);
-        return result;
     }
 
     // ── BVN Verification via SecureWave (authenticated / post-signup) ─────────

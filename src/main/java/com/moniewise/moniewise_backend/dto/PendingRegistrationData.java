@@ -9,14 +9,10 @@ import java.io.Serializable;
  * has not yet verified their OTP.  Stored in Redis with a TTL so unverified
  * registrations are automatically discarded and never pollute the database.
  *
- * <p>The phone number is collected during signup so BVN pre-verification can
- * locate the pending registration before the account is persisted.
- *
- * <p>After the user completes the optional BVN pre-verify step
- * ({@code POST /auth/bvn/pre-verify}), the {@link #bvn} and
- * {@link #bvnVerificationResult} fields are populated so they can be
- * persisted to PostgreSQL when the OTP is verified and the user record is
- * created.
+ * <p>The phone number is collected during signup. BVN is not collected here.
+ * The public pre-verify route was removed. {@link #bvn} and
+ * {@link #bvnVerificationResult} stay so a signup already waiting in Redis
+ * can still be finished. New signups leave both empty.
  */
 public class PendingRegistrationData implements Serializable {
 
@@ -30,14 +26,12 @@ public class PendingRegistrationData implements Serializable {
     private long otpExpiresAtEpochMillis;
 
     /**
-     * The raw 11-digit BVN submitted during the pre-verify step.
-     * {@code null} if the user skipped BVN verification during signup.
+     * Left for a signup that already stored a BVN. New signups leave this empty.
      */
     private String bvn;
 
     /**
-     * The full structured result returned by SecureWave during the pre-verify step.
-     * {@code null} if BVN pre-verification has not yet been completed.
+     * Left for a signup that already stored a BVN result. New signups leave this empty.
      */
     private BvnVerificationResultDto bvnVerificationResult;
 

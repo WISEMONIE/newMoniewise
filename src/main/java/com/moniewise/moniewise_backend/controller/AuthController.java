@@ -1,10 +1,7 @@
 package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.AuthRequest;
-import com.moniewise.moniewise_backend.dto.request.BvnPreVerifyRequest;
 import com.moniewise.moniewise_backend.dto.request.ChangePasswordRequest;
-import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
-import com.moniewise.moniewise_backend.service.KycService;
 import com.moniewise.moniewise_backend.dto.response.AuthResponse;
 import com.moniewise.moniewise_backend.dto.response.LogoutResponse;
 import com.moniewise.moniewise_backend.entity.PasswordResetToken;
@@ -32,7 +29,6 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
-import javax.validation.Valid;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -52,7 +48,6 @@ public class AuthController {
     @Autowired private NotificationService notificationService;
     @Autowired private AuthSessionService authSessionService;
     @Autowired private AbuseProtectionService abuseProtectionService;
-    @Autowired private KycService kycService;
     @Autowired private TrustedDeviceRepository trustedDeviceRepository;
     @Autowired private AccountDeletionService accountDeletionService;
     @Autowired private HowToUseWisemonieNudgeService howToUseWisemonieNudgeService;
@@ -170,56 +165,6 @@ public class AuthController {
             logger.error("verify-signup-otp failed for {}", email, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("status", "error", "message", "Verification failed. Please try again."));
-        }
-    }
-
-    /**
-     * Stage-1.5: BVN pre-verification — called AFTER /auth/signup but BEFORE
-     * /auth/verify-signup-otp, while the user is still unauthenticated.
-     *
-     * <p>The caller submits their phone (used to locate the in-progress pending
-     * registration in Redis) and their 11-digit BVN.  The backend:
-     * <ol>
-     *   <li>Confirms a pending registration exists for the phone.</li>
-     *   <li>Calls SecureWave's BVN verification API using the email + phone on record.</li>
-     *   <li>Stores the verified BVN data inside the Redis pending record so it is
-     *       automatically persisted to PostgreSQL when the OTP is verified.</li>
-     * </ol>
-     *
-     * <p>POST /auth/bvn/pre-verify
-     *
-     * <p>Request body: {@code {"phone": "08012345678", "bvn": "22435553718"}}
-     */
-    @PostMapping("/bvn/pre-verify")
-    public ResponseEntity<?> bvnPreVerify(
-            @Valid @RequestBody BvnPreVerifyRequest request,
-            HttpServletRequest httpRequest) {
-
-        String phone = request.getPhone().trim();
-        String throttleKey = abuseProtectionService.buildKey(phone, httpRequest.getRemoteAddr());
-        abuseProtectionService.checkAllowed(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
-
-        try {
-            BvnVerificationResultDto result = kycService.preVerifyBvn(
-                    phone,
-                    request.getBvn().trim(),
-                    request.getFirstName(),
-                    request.getLastName(),
-                    request.getDob());
-
-            abuseProtectionService.recordSuccess(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
-            return ResponseEntity.ok(result);
-
-        } catch (IllegalArgumentException e) {
-            // No pending registration found — user hasn't called /auth/signup yet
-            abuseProtectionService.recordFailure(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
-            return ResponseEntity.badRequest().body(Map.of("status", "error", "message", e.getMessage()));
-        } catch (Exception e) {
-            // SecureWave rejected or returned an error
-            abuseProtectionService.recordFailure(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
-            logger.error("BVN pre-verify failed for phone {}: {}", phone, e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("status", "error", "message", e.getMessage()));
         }
     }
 
