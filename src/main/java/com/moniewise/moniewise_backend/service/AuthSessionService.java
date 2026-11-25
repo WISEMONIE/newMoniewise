@@ -58,6 +58,24 @@ public class AuthSessionService {
         return session.getSessionId();
     }
 
+    /**
+     * A session for the website admin. Unlike {@link #createSession}, it
+     * leaves the user's other sessions alone, so signing in on the website
+     * does not sign an admin out of the phone app.
+     */
+    @Transactional
+    public String createSiteAdminSession(User user) {
+        LocalDateTime now = LocalDateTime.now();
+        AuthSession session = new AuthSession();
+        session.setUser(userRepository.getReferenceById(user.getId()));
+        session.setSessionId(UUID.randomUUID().toString());
+        session.setCreatedAt(now);
+        session.setLastSeenAt(now);
+        session.setRevoked(false);
+        authSessionRepository.save(session);
+        return session.getSessionId();
+    }
+
     public record PushTarget(String token, String devicePlatform) {}
 
     @Transactional(readOnly = true)

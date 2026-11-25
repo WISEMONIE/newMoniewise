@@ -2,9 +2,12 @@ package com.moniewise.moniewise_backend.aml;
 
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.enums.Role;
+import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -26,6 +29,9 @@ public class AmlNotifier {
     static final String CUSTOMER_TITLE = "Your payment is being reviewed";
 
     private final NotificationService notificationService;
+
+    @Autowired(required = false)
+    private UserRepository userRepository;
 
     @Value("${moniewise.compliance.alert-email:${COMPLIANCE_ALERT_EMAIL:}}")
     private String complianceEmail = "";
@@ -66,6 +72,41 @@ public class AmlNotifier {
             logger.error("[AML] {} (compliance email not sent; set COMPLIANCE_ALERT_EMAIL)", subject);
         } else {
             logger.warn("[AML] {}", subject);
+        }
+    }
+
+    // ── Admin pushes ───────────────────────────────────────────────────────
+    // Push text passes through Firebase, so it carries no names, emails or
+    // account numbers: only what kind of task is waiting and the amount.
+
+    public void adminsHoldStarted(BigDecimal amount) {
+        pushAdmins("Payment review needed",
+                "A " + naira(amount) + " payment was put on hold. Open the admin site to review it.");
+    }
+
+    public void adminsTellRubies() {
+        pushAdmins("Tell Rubies about a held payment",
+                "A held customer has not replied in 24 hours. Open the admin site to inform Rubies.");
+    }
+
+    public void adminsWalletNeedsFixing() {
+        pushAdmins("A wallet could not open",
+                "A verified customer's wallet keeps failing to open. Open the admin site to fix it.");
+    }
+
+    private void pushAdmins(String title, String message) {
+        if (userRepository == null) {
+            return;
+        }
+        try {
+            for (User admin : userRepository.findByRole(Role.ADMIN)) {
+                if (!admin.isDeleted()) {
+                    notificationService.sendTitledNotification(String.valueOf(admin.getId()), title, message,
+                            NotificationType.SYSTEM, null, null);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("[AML] Could not push admins: {}", e.getMessage());
         }
     }
 

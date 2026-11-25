@@ -38,6 +38,7 @@ class AmlCaseServiceTest {
     @Mock private WalletRepository walletRepository;
     @Mock private WalletService walletService;
     @Mock private AmlNotifier notifier;
+    @Mock private AmlLockRepository locks;
 
     private AmlCaseService cases;
     private InflowHold hold;
@@ -46,7 +47,7 @@ class AmlCaseServiceTest {
     @BeforeEach
     void setUp() {
         cases = new AmlCaseService(holds, inflowReview, userRepository, walletRepository, walletService,
-                notifier, AmlTestSupport.defaults(), Optional.of(AmlTestSupport.clock()));
+                notifier, AmlTestSupport.defaults(), locks, Optional.of(AmlTestSupport.clock()));
         hold = new InflowHold();
         hold.setId(9L);
         hold.setUserId(USER_ID);
@@ -74,6 +75,19 @@ class AmlCaseServiceTest {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
         when(walletRepository.findByUserId(USER_ID)).thenReturn(Optional.of(wallet));
         when(inflowReview.creditsOn(any())).thenReturn(List.of());
+        when(locks.tryLock(anyLong())).thenReturn(true);
+    }
+
+    @Test
+    void theReviewJobSkipsWhenAnotherServerIsRunningIt() {
+        when(locks.tryLock(anyLong())).thenReturn(false);
+        when(holds.findByReasonAndStatusAndCustomerContactedAtIsNullAndStartedAtBefore(any(), any(), any()))
+                .thenReturn(List.of(hold));
+
+        cases.reviewOpenHolds();
+
+        assertEquals(InflowHold.Status.ACTIVE, hold.getStatus());
+        verifyNoInteractions(notifier);
     }
 
     @Test

@@ -26,7 +26,21 @@ public class BlogScopeFilter extends OncePerRequestFilter {
                     "{\"error\":\"This token is scoped to blog administration only\"}");
             return;
         }
+        // The website admin token: blog, payment reviews and signing out. Nothing else.
+        if (JwtUtil.SITE_ADMIN_SCOPE.equals(scope) && !siteAdminPath(path)) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            response.setContentType("application/json");
+            response.getWriter().write(
+                    "{\"error\":\"This token is scoped to the website admin only\"}");
+            return;
+        }
 
         chain.doFilter(request, response);
+    }
+
+    static boolean siteAdminPath(String path) {
+        return path.startsWith("/admin/blog/") || path.equals("/admin/blog")
+                || path.startsWith("/admin/aml/") || path.equals("/admin/aml")
+                || path.equals("/site-admin/auth/logout");
     }
 }

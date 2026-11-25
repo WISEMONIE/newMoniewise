@@ -91,6 +91,27 @@ public class JwtUtil {
         return createToken(claims, userDetails.getUsername());
     }
 
+    /** The website admin scope: blog and payment reviews, nothing else. */
+    public static final String SITE_ADMIN_SCOPE = "site-admin";
+
+    /**
+     * A short-lived token for the website admin. It only works on
+     * /admin/blog and /admin/aml (see BlogScopeFilter).
+     */
+    public String generateSiteAdminToken(UserDetails userDetails, String sessionId, long ttlMillis) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "ROLE_ADMIN");
+        claims.put("sessionId", sessionId);
+        claims.put("scope", SITE_ADMIN_SCOPE);
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(userDetails.getUsername())
+                .setIssuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + ttlMillis))
+                .signWith(SignatureAlgorithm.HS512, secret)
+                .compact();
+    }
+
     public String extractScope(String token) {
         try {
             return extractClaim(token, claims -> claims.get("scope", String.class));

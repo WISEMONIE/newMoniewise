@@ -95,6 +95,10 @@ public class SecurityConfig {
                 .antMatchers("/ws", "/ws/**", "/ws-sockjs", "/ws-sockjs/**").permitAll()
                 .antMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .antMatchers("/actuator/metrics/**", "/actuator/prometheus").hasRole("ADMIN")
+                // Website admin sign-in (blog and payment reviews). Only the two
+                // sign-in steps are public; everything else needs the scoped token.
+                .antMatchers("/site-admin/auth/code", "/site-admin/auth/verify").permitAll()
+                .antMatchers("/site-admin/auth/logout").authenticated()
                 .antMatchers("/admin/**").hasRole("ADMIN")   // URL-level guard (defence-in-depth alongside @PreAuthorize)
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
                 .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**", "/analytics/**", "/badges/**").authenticated()

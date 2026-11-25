@@ -12,7 +12,10 @@ import java.util.Map;
  * Review tools for large-inflow holds and wallet freezes.
  *
  * <ul>
- *   <li>{@code GET  /admin/aml/holds} open holds, oldest first</li>
+ *   <li>{@code GET  /admin/aml/todos} the dashboard to-do lists</li>
+ *   <li>{@code POST /admin/aml/holds/{id}/rubies-informed} {"note"}</li>
+ *   <li>{@code POST /admin/aml/wallets/{userId}/retry} open a failed wallet now</li>
+ *   <li>{@code GET  /admin/aml/holds?view=open|closed} open holds oldest first, or recent releases</li>
  *   <li>{@code GET  /admin/aml/holds/{id}} the case file, with the Rubies escalation text</li>
  *   <li>{@code POST /admin/aml/holds/{id}/contact} {"note"} the customer got in touch</li>
  *   <li>{@code POST /admin/aml/holds/{id}/note} {"note"}</li>
@@ -33,9 +36,28 @@ public class AmlAdminController {
         this.cases = cases;
     }
 
+    /** {@code ?view=open} (default) or {@code ?view=closed}. */
     @GetMapping("/holds")
-    public List<InflowHold> openHolds() {
-        return cases.openHolds();
+    public List<Map<String, Object>> holds(@RequestParam(defaultValue = "open") String view) {
+        return cases.holdSummaries(!"closed".equalsIgnoreCase(view));
+    }
+
+    /** The dashboard: to-dos split into inform Rubies, review now, waiting, wallets to fix and frozen. */
+    @GetMapping("/todos")
+    public Map<String, Object> todos() {
+        return cases.todos();
+    }
+
+    @PostMapping("/holds/{id}/rubies-informed")
+    public InflowHold rubiesInformed(@PathVariable Long id,
+                                     @RequestBody(required = false) Map<String, String> body,
+                                     Authentication auth) {
+        return cases.markRubiesInformed(id, auth.getName(), body == null ? null : body.get("note"));
+    }
+
+    @PostMapping("/wallets/{userId}/retry")
+    public Map<String, Object> retryWallet(@PathVariable Long userId, Authentication auth) {
+        return cases.retryWalletOpening(userId, auth.getName());
     }
 
     @GetMapping("/holds/{id}")

@@ -94,6 +94,10 @@ public class InflowHold {
     @Column(name = "escalated_at")
     private LocalDateTime escalatedAt;
 
+    /** When someone on the team told Rubies about this case. */
+    @Column(name = "rubies_notified_at")
+    private LocalDateTime rubiesNotifiedAt;
+
     @Column(name = "released_at")
     private LocalDateTime releasedAt;
 

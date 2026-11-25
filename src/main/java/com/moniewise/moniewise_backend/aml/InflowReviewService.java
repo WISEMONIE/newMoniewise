@@ -156,6 +156,7 @@ public class InflowReviewService {
         logger.warn("[AML] Hold {} started for user={} credit={} total24h={} nameCheck={}",
                 hold.getId(), user.getId(), inflow.amount(), total24h, event.getNameCheck());
         notifier.customerHoldStarted(user, hold.getOutflowCap());
+        notifier.adminsHoldStarted(inflow.amount());
         notifier.compliance("Hold " + hold.getId() + " started for user " + user.getId()
                         + ": " + AmlNotifier.naira(inflow.amount()) + " (name check " + event.getNameCheck() + ")",
                 describeCredit(user, event, hold));

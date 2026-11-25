@@ -72,6 +72,11 @@ class AmlIntegrationTest {
     @Autowired private WalletRepository walletRepository;
     @Autowired private KycProfileRepository kycProfileRepository;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private com.moniewise.moniewise_backend.repository.OtpRepository otpRepository;
+    @Autowired private com.moniewise.moniewise_backend.service.AuthSessionService sessions;
+    @Autowired private com.moniewise.moniewise_backend.security.JwtUtil jwtUtil;
+    @Autowired private com.moniewise.moniewise_backend.service.UserService userService;
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     /** No call ever reaches a real bank from these tests. */
     @MockBean private PaymentGatewayResolver paymentGatewayResolver;
@@ -391,8 +396,16 @@ class AmlIntegrationTest {
 
     // ── The review job ─────────────────────────────────────────────────────
 
+    private int pushes(User user, String title) {
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM outbox_events WHERE user_id = ? AND payload->>'__title' = ?",
+                Integer.class, user.getId(), title);
+        return n == null ? 0 : n;
+    }
+
     @Test
     void silentCustomersAreEscalatedAndContactedOnesAreNot() {
+        User admin = account(Role.ADMIN, "Admin-Pass-9");
         Customer silent = established();
         Customer called = established();
         rubiesCredit(silent, 2_000_000, "IT-" + UUID.randomUUID(), "ADA OKAFOR");
@@ -410,5 +423,156 @@ class AmlIntegrationTest {
         assertEquals(InflowHold.Status.ACTIVE, largeHold(called).getStatus());
         assertThrows(OutflowBlockedException.class, () -> guard.authorize(silent.id(), new BigDecimal("60000"),
                 OutflowGuard.Channel.BANK_TRANSFER), "an escalated hold still holds");
+        assertTrue(pushes(admin, "Tell Rubies about a held payment") >= 1,
+                "admins get a push to tell Rubies, saved after the job commits");
+        assertTrue(pushes(admin, "Payment review needed") >= 2, "and one for each new hold");
+    }
+
+    // ── Review console ─────────────────────────────────────────────────────
+
+    private User account(Role role, String password) {
+        Customer c = established();
+        User user = c.user();
+        user.setRole(role);
+        user.setPassword(passwordEncoder.encode(password));
+        return userRepository.saveAndFlush(user);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions siteAuth(String step, String body) throws Exception {
+        return mvc.perform(post("/site-admin/auth/" + step)
+                .contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    private static String json(String email, String password, String code) {
+        StringBuilder out = new StringBuilder("{\"email\":\"").append(email).append('"');
+        if (password != null) out.append(",\"password\":\"").append(password).append('"');
+        if (code != null) out.append(",\"code\":\"").append(code).append('"');
+        return out.append('}').toString();
+    }
+
+    private String signIn(User admin, String password) throws Exception {
+        siteAuth("code", json(admin.getEmail(), password, null)).andExpect(status().isOk());
+        String code = otpRepository.findByUserId(admin.getId()).orElseThrow().getOtpCode();
+        String body = siteAuth("verify", json(admin.getEmail(), password, code))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return new com.fasterxml.jackson.databind.ObjectMapper().readTree(body).get("token").asText();
+    }
+
+    @Test
+    void websiteSignInNeedsThePasswordTheCodeAndAnAdminAccount() throws Exception {
+        User admin = account(Role.ADMIN, "Admin-Pass-1");
+        User plain = account(Role.USER, "User-Pass-1");
+
+        siteAuth("code", json(plain.getEmail(), "User-Pass-1", null)).andExpect(status().isUnauthorized());
+        assertTrue(otpRepository.findByUserId(plain.getId()).isEmpty(), "no code is sent to a non-admin");
+        siteAuth("code", json(admin.getEmail(), "wrong", null)).andExpect(status().isUnauthorized());
+
+        siteAuth("code", json(admin.getEmail(), "Admin-Pass-1", null)).andExpect(status().isOk());
+        String code = otpRepository.findByUserId(admin.getId()).orElseThrow().getOtpCode();
+        siteAuth("verify", json(admin.getEmail(), "wrong", code)).andExpect(status().isUnauthorized());
+        siteAuth("verify", json(admin.getEmail(), null, code)).andExpect(status().isUnauthorized());
+        siteAuth("verify", json(admin.getEmail(), "Admin-Pass-1", "000000")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void theWebsiteTokenOnlyOpensBlogAndReviews() throws Exception {
+        User admin = account(Role.ADMIN, "Admin-Pass-2");
+        String bearer = "Bearer " + signIn(admin, "Admin-Pass-2");
+
+        mvc.perform(get("/admin/aml/holds").header("Authorization", bearer)).andExpect(status().isOk());
+        mvc.perform(get("/admin/aml/todos").header("Authorization", bearer)).andExpect(status().isOk());
+        mvc.perform(get("/admin/blog").header("Authorization", bearer))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/users/me").header("Authorization", bearer)).andExpect(status().isForbidden());
+        mvc.perform(get("/wallets").header("Authorization", bearer)).andExpect(status().isForbidden());
+        mvc.perform(get("/admin/rubies/revenue-wallet").header("Authorization", bearer))
+                .andExpect(status().isForbidden());
+        assertTrue(otpRepository.findByUserId(admin.getId()).isEmpty(), "a code works once");
+    }
+
+    @Test
+    void websiteSignInKeepsThePhoneSessionAndSignOutEndsOnlyTheWebsite() throws Exception {
+        User admin = account(Role.ADMIN, "Admin-Pass-3");
+        String phoneSession = sessions.createSession(admin);
+        String phoneToken = jwtUtil.generateToken(userService.loadUserByUsername(admin.getEmail()), phoneSession);
+
+        String websiteToken = signIn(admin, "Admin-Pass-3");
+
+        mvc.perform(get("/users/me").header("Authorization", "Bearer " + phoneToken)).andExpect(status().isOk());
+
+        mvc.perform(post("/site-admin/auth/logout").header("Authorization", "Bearer " + websiteToken))
+                .andExpect(status().isOk());
+        mvc.perform(get("/admin/aml/holds").header("Authorization", "Bearer " + websiteToken))
+                .andExpect(result -> assertTrue(result.getResponse().getStatus() == 401
+                        || result.getResponse().getStatus() == 403));
+        mvc.perform(get("/users/me").header("Authorization", "Bearer " + phoneToken)).andExpect(status().isOk());
+    }
+
+    @Test
+    void theDashboardSortsTasksByWhoMustAct() throws Exception {
+        Customer silent = established();
+        Customer called = established();
+        Customer fresh = established();
+        for (Customer c : List.of(silent, called, fresh)) {
+            rubiesCredit(c, 2_000_000, "IT-" + UUID.randomUUID(), "ADA OKAFOR");
+        }
+        InflowHold old = largeHold(silent);
+        old.setStartedAt(LocalDateTime.now().minusHours(25));
+        holds.saveAndFlush(old);
+        cases.recordContact(largeHold(called).getId(), "ops", "Called in");
+        cases.reviewOpenHolds();
+        var admin = user("ops@example.test").roles("ADMIN");
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+        var todos = mapper.readTree(mvc.perform(get("/admin/aml/todos").with(admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertTrue(ids(todos.get("informRubies")).contains(silent.id()));
+        assertTrue(ids(todos.get("reviewNow")).contains(called.id()));
+        assertTrue(ids(todos.get("waitingOnCustomer")).contains(fresh.id()));
+        assertFalse(ids(todos.get("waitingOnCustomer")).contains(silent.id()));
+
+        mvc.perform(post("/admin/aml/holds/" + old.getId() + "/rubies-informed").with(admin)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"Emailed support\"}"))
+                .andExpect(status().isOk());
+        var after = mapper.readTree(mvc.perform(get("/admin/aml/todos").with(admin))
+                .andReturn().getResponse().getContentAsString());
+        assertFalse(ids(after.get("informRubies")).contains(silent.id()), "off the list once Rubies is told");
+        assertTrue(largeHold(silent).getStatus().isHolding(), "the hold stays");
+    }
+
+    private static List<Long> ids(com.fasterxml.jackson.databind.JsonNode rows) {
+        List<Long> out = new ArrayList<>();
+        rows.forEach(r -> out.add(r.get("userId").asLong()));
+        return out;
+    }
+
+    @Test
+    void theHoldListNamesTheCustomerAndLeavesOutFirstDayLimits() throws Exception {
+        Customer held = established();
+        rubiesCredit(held, 2_000_000, "IT-" + UUID.randomUUID(), "ADA OKAFOR");
+        Customer fresh = customer(new BigDecimal("50000"), LocalDateTime.now().minusHours(1),
+                LocalDateTime.now().minusHours(2));
+        guard.authorize(fresh.id(), new BigDecimal("1000"), OutflowGuard.Channel.AIRTIME);
+        var admin = user("ops@example.test").roles("ADMIN");
+
+        String open = mvc.perform(get("/admin/aml/holds").with(admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertTrue(open.contains("\"userId\":" + held.id() + ","));
+        assertTrue(open.contains("Emmanuel Madu"));
+        assertTrue(open.contains(held.wallet().getAccountNumber()));
+        assertFalse(open.contains("\"userId\":" + fresh.id() + ","), "first-day limits need no review");
+
+        cases.release(largeHold(held).getId(), "ops", "checked");
+        String closed = mvc.perform(get("/admin/aml/holds?view=closed").with(admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertTrue(closed.contains("\"userId\":" + held.id() + ","));
+    }
+
+    @Test
+    void theOldBackendConsoleIsGone() throws Exception {
+        mvc.perform(get("/admin-console/aml/index.html"))
+                .andExpect(result -> assertNotEquals(200, result.getResponse().getStatus()));
     }
 }

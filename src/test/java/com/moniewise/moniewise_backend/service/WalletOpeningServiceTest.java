@@ -98,7 +98,8 @@ class WalletOpeningServiceTest {
         assertEquals("Ada Okafor", profile.get("name"));
         verify(activationJourneyNudgeService).nudgeAfterWalletCreated(USER_ID);
         verify(redisTemplate).delete(List.of(
-                WalletOpeningService.ATTEMPTS_KEY + USER_ID, WalletOpeningService.HOLD_KEY + USER_ID));
+                WalletOpeningService.ATTEMPTS_KEY + USER_ID, WalletOpeningService.HOLD_KEY + USER_ID,
+                WalletOpeningService.LAST_ERROR_KEY + USER_ID));
     }
 
     @Test
@@ -207,6 +208,32 @@ class WalletOpeningServiceTest {
         when(walletService.createWalletForUser(any(User.class))).thenThrow(new RuntimeException("down"));
 
         assertTrue(service.tryOpenFromVerifiedKyc(USER_ID, "test").isEmpty());
+    }
+
+    @Test
+    void failedOpeningsListOnlyWalletsThatFailedWithTheBanksReason() {
+        user.getProfileData().put("name", "Joshua Mathew");
+        User neverTried = new User();
+        neverTried.setId(8L);
+        when(userRepository.findVerifiedUserIdsWithoutFundingAccount(50)).thenReturn(List.of(USER_ID, 8L));
+        when(valueOps.get(WalletOpeningService.ATTEMPTS_KEY + USER_ID)).thenReturn("5");
+        when(valueOps.get(WalletOpeningService.LAST_ERROR_KEY + USER_ID))
+                .thenReturn("WALLET_KYC_NAME_MISMATCH: Names do not match");
+        when(valueOps.get(WalletOpeningService.ATTEMPTS_KEY + 8L)).thenReturn(null);
+
+        var rows = service.failedOpenings(50);
+
+        assertEquals(1, rows.size(), "a wallet that never failed is not a to-do");
+        assertEquals("Joshua Mathew", rows.get(0).get("customerName"));
+        assertEquals(5, rows.get(0).get("attempts"));
+        assertEquals("WALLET_KYC_NAME_MISMATCH: Names do not match", rows.get(0).get("lastError"));
+    }
+
+    @Test
+    void theFailureReasonKeepsTheBanksWords() {
+        assertEquals("WALLET_KYC_NAME_MISMATCH: Names do not match", WalletOpeningService.failureText(
+                WalletProvisioningException.kycIdentityMismatch("Names do not match")));
+        assertEquals("down", WalletOpeningService.failureText(new RuntimeException("down")));
     }
 
     @Test

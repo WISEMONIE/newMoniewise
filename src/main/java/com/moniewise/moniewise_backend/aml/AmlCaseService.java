@@ -38,7 +38,15 @@ public class AmlCaseService {
     private final WalletService walletService;
     private final AmlNotifier notifier;
     private final AmlSettings settings;
+    private final AmlLockRepository locks;
     private final Clock clock;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @Lazy
+    private com.moniewise.moniewise_backend.service.WalletOpeningService walletOpeningService;
+
+    /** Only one server runs the review job at a time. */
+    static final long REVIEW_JOB_LOCK = (0x414D4CL << 32) | 0x52455649L;
 
     public AmlCaseService(InflowHoldRepository holds,
                           InflowReviewService inflowReview,
@@ -47,6 +55,7 @@ public class AmlCaseService {
                           @Lazy WalletService walletService,
                           AmlNotifier notifier,
                           AmlSettings settings,
+                          AmlLockRepository locks,
                           Optional<Clock> clock) {
         this.holds = holds;
         this.inflowReview = inflowReview;
@@ -55,12 +64,140 @@ public class AmlCaseService {
         this.walletService = walletService;
         this.notifier = notifier;
         this.settings = settings;
+        this.locks = locks;
         this.clock = clock.orElse(Clock.systemDefaultZone());
     }
 
+    /**
+     * Rows for the review console. Open: large-inflow holds still holding,
+     * oldest first. Closed: the 200 most recent releases. First-day limits are
+     * left out because they end on their own and need no review.
+     */
     @Transactional(readOnly = true)
-    public List<InflowHold> openHolds() {
-        return holds.findByStatusInOrderByStartedAtAsc(InflowReviewService.HOLDING);
+    public List<Map<String, Object>> holdSummaries(boolean open) {
+        List<InflowHold> rows = open
+                ? holds.findByReasonAndStatusInOrderByStartedAtAsc(InflowHold.Reason.LARGE_INFLOW,
+                        InflowReviewService.HOLDING)
+                : holds.findTop200ByReasonAndStatusOrderByReleasedAtDesc(InflowHold.Reason.LARGE_INFLOW,
+                        InflowHold.Status.RELEASED);
+        LocalDateTime now = LocalDateTime.now(clock);
+        return rows.stream().map(hold -> summary(hold, now)).toList();
+    }
+
+    private Map<String, Object> summary(InflowHold hold, LocalDateTime now) {
+        User user = userRepository.findById(hold.getUserId()).orElse(null);
+        Wallet wallet = walletRepository.findByUserId(hold.getUserId()).orElse(null);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", hold.getId());
+        row.put("userId", hold.getUserId());
+        row.put("customerName", displayName(user));
+        row.put("email", user == null ? "" : nullToEmpty(user.getEmail()));
+        row.put("accountNumber", wallet == null ? "" : nullToEmpty(wallet.getAccountNumber()));
+        row.put("walletStatus", wallet == null ? "" : String.valueOf(wallet.getStatus()));
+        row.put("status", hold.getStatus());
+        row.put("nameCheck", hold.getNameCheck());
+        row.put("triggerAmount", hold.getTriggerAmount());
+        row.put("inflowTotal24h", hold.getInflowTotal24h());
+        row.put("outflowUsed", hold.getOutflowUsed());
+        row.put("outflowCap", hold.getOutflowCap());
+        row.put("startedAt", hold.getStartedAt());
+        row.put("hoursOpen", java.time.Duration.between(hold.getStartedAt(), now).toHours());
+        row.put("customerContactedAt", hold.getCustomerContactedAt());
+        row.put("escalatedAt", hold.getEscalatedAt());
+        row.put("rubiesNotifiedAt", hold.getRubiesNotifiedAt());
+        row.put("releasedAt", hold.getReleasedAt());
+        row.put("releasedBy", hold.getReleasedBy());
+        return row;
+    }
+
+    private static String displayName(User user) {
+        if (user == null || user.getProfileData() == null || user.getProfileData().get("name") == null) {
+            return "";
+        }
+        return user.getProfileData().get("name").toString();
+    }
+
+    /**
+     * The admin dashboard: what needs doing, split by who has to act.
+     * <ul>
+     *   <li>informRubies: escalated and Rubies not told yet</li>
+     *   <li>reviewNow: the customer got in touch, so a decision is due</li>
+     *   <li>waitingOnCustomer: no word yet, with hours left before it escalates</li>
+     *   <li>walletsToFix: verified customers whose wallet keeps failing to open</li>
+     *   <li>frozenWallets: wallets on post-no-debit</li>
+     * </ul>
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> todos() {
+        LocalDateTime now = LocalDateTime.now(clock);
+        List<Map<String, Object>> informRubies = new java.util.ArrayList<>();
+        List<Map<String, Object>> reviewNow = new java.util.ArrayList<>();
+        List<Map<String, Object>> waiting = new java.util.ArrayList<>();
+        for (InflowHold hold : holds.findByReasonAndStatusInOrderByStartedAtAsc(
+                InflowHold.Reason.LARGE_INFLOW, InflowReviewService.HOLDING)) {
+            Map<String, Object> row = summary(hold, now);
+            if (hold.getStatus() == InflowHold.Status.ESCALATED && hold.getRubiesNotifiedAt() == null) {
+                informRubies.add(row);
+            } else if (hold.getStatus() == InflowHold.Status.ACTIVE && hold.getCustomerContactedAt() != null) {
+                reviewNow.add(row);
+            } else if (hold.getStatus() == InflowHold.Status.ACTIVE) {
+                long left = settings.silenceHours()
+                        - java.time.Duration.between(hold.getStartedAt(), now).toHours();
+                row.put("hoursUntilEscalation", Math.max(0, left));
+                waiting.add(row);
+            }
+        }
+        List<Map<String, Object>> walletsToFix = walletOpeningService == null
+                ? List.of() : walletOpeningService.failedOpenings(50);
+        List<Map<String, Object>> frozen = walletRepository
+                .findTop100ByStatusOrderByUpdatedAtDesc(WalletStatus.FROZEN).stream()
+                .filter(w -> w.getUser() != null)
+                .map(w -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("userId", w.getUser().getId());
+                    row.put("customerName", displayName(w.getUser()));
+                    row.put("accountNumber", nullToEmpty(w.getAccountNumber()));
+                    row.put("balance", w.getBalance());
+                    row.put("since", w.getUpdatedAt());
+                    return row;
+                }).toList();
+
+        Map<String, Object> counts = new LinkedHashMap<>();
+        counts.put("informRubies", informRubies.size());
+        counts.put("reviewNow", reviewNow.size());
+        counts.put("waitingOnCustomer", waiting.size());
+        counts.put("walletsToFix", walletsToFix.size());
+        counts.put("frozenWallets", frozen.size());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("counts", counts);
+        result.put("informRubies", informRubies);
+        result.put("reviewNow", reviewNow);
+        result.put("waitingOnCustomer", waiting);
+        result.put("walletsToFix", walletsToFix);
+        result.put("frozenWallets", frozen);
+        return result;
+    }
+
+    /** Someone told Rubies. Takes the case off the "Inform Rubies" list; the hold stays. */
+    @Transactional
+    public InflowHold markRubiesInformed(Long holdId, String staff, String note) {
+        InflowHold hold = find(holdId);
+        LocalDateTime now = LocalDateTime.now(clock);
+        hold.setRubiesNotifiedAt(now);
+        hold.addNote(staff, "Rubies informed" + (note == null || note.isBlank() ? "" : ": " + note.trim()), now);
+        return holds.save(hold);
+    }
+
+    /** Tries to open a failed wallet now, ignoring the wait after the last failure. */
+    public Map<String, Object> retryWalletOpening(Long userId, String staff) {
+        if (walletOpeningService == null) {
+            throw new IllegalStateException("Wallet opening is not available");
+        }
+        logger.warn("[AML] Wallet opening retried by {} for user={}", staff, userId);
+        Wallet wallet = walletOpeningService.openFromVerifiedKyc(userId);
+        return Map.of("userId", userId, "accountNumber", nullToEmpty(wallet.getAccountNumber()),
+                "bankName", nullToEmpty(wallet.getBankName()));
     }
 
     @Transactional(readOnly = true)
@@ -73,6 +210,7 @@ public class AmlCaseService {
         file.put("credits", inflowReview.creditsOn(hold));
         file.put("customer", user == null ? Map.of() : Map.of(
                 "userId", user.getId(),
+                "name", displayName(user),
                 "email", nullToEmpty(user.getEmail()),
                 "phone", nullToEmpty(user.getPhone()),
                 "signedUpAt", String.valueOf(user.getCreatedAt())));
@@ -164,6 +302,10 @@ public class AmlCaseService {
         if (!settings.enabled()) {
             return;
         }
+        if (!Boolean.TRUE.equals(locks.tryLock(REVIEW_JOB_LOCK))) {
+            logger.debug("[AML] Review job already running on another server");
+            return;
+        }
         LocalDateTime now = LocalDateTime.now(clock);
         for (InflowHold hold : holds.findByReasonAndStatusAndEndsAtBefore(
                 InflowHold.Reason.FIRST_DAY, InflowHold.Status.ACTIVE, now)) {
@@ -177,14 +319,52 @@ public class AmlCaseService {
                     + settings.silenceHours() + "h of the hold. Hold kept.", now);
             User user = userRepository.findById(hold.getUserId()).orElse(null);
             Wallet wallet = walletRepository.findByUserId(hold.getUserId()).orElse(null);
-            notifier.compliance("Silent customer on hold " + hold.getId() + " (user " + hold.getUserId()
-                            + "): escalate to Rubies",
-                    "Rubies' guide treats silence after a limit drop as a strong fraud signal.\n"
-                            + "Send this to Rubies (support@rubies.ng):\n\n" + escalationText(hold, user, wallet));
+            String subject = "Silent customer on hold " + hold.getId() + " (user " + hold.getUserId()
+                    + "): escalate to Rubies";
+            String body = "Rubies' guide treats silence after a limit drop as a strong fraud signal.\n"
+                    + "Send this to Rubies (support@rubies.ng):\n\n" + escalationText(hold, user, wallet);
+            afterCommit(() -> notifier.compliance(subject, body));
+            afterCommit(notifier::adminsTellRubies);
         }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    /**
+     * Sends only once the change is saved, so a rolled-back run never alerts.
+     * Anything the send writes (the push outbox) gets its own transaction:
+     * after a commit, writes in the old one would be silently dropped.
+     */
+    private void afterCommit(Runnable send) {
+        Runnable inOwnTransaction = () -> {
+            if (transactionManager == null) {
+                send.run();
+                return;
+            }
+            org.springframework.transaction.support.TransactionTemplate tx =
+                    new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+            tx.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            tx.executeWithoutResult(status -> send.run());
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            try {
+                                inOwnTransaction.run();
+                            } catch (RuntimeException e) {
+                                logger.warn("[AML] Alert after commit failed: {}", e.getMessage());
+                            }
+                        }
+                    });
+        } else {
+            inOwnTransaction.run();
+        }
+    }
 
     private void markEscalated(InflowHold hold, String staff, String note, LocalDateTime now) {
         if (!hold.getStatus().isHolding()) {
@@ -217,8 +397,7 @@ public class AmlCaseService {
     /** The details Rubies asks for in guardrail 5, ready to paste. */
     String escalationText(InflowHold hold, User user, Wallet wallet) {
         StringBuilder text = new StringBuilder();
-        String name = user != null && user.getProfileData() != null && user.getProfileData().get("name") != null
-                ? user.getProfileData().get("name").toString() : "-";
+        String name = displayName(user).isEmpty() ? "-" : displayName(user);
         text.append("Customer: ").append(name).append("\n");
         text.append("Account number: ").append(wallet != null ? nullToEmpty(wallet.getAccountNumber()) : "-").append("\n");
         text.append("Account opened: ").append(wallet != null && wallet.getOpenedAt() != null

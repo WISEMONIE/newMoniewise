@@ -30,6 +30,12 @@ public interface InflowHoldRepository extends JpaRepository<InflowHold, Long> {
 
     List<InflowHold> findByUserIdOrderByIdDesc(Long userId);
 
+    List<InflowHold> findByReasonAndStatusInOrderByStartedAtAsc(InflowHold.Reason reason,
+                                                                 Collection<InflowHold.Status> statuses);
+
+    List<InflowHold> findTop200ByReasonAndStatusOrderByReleasedAtDesc(InflowHold.Reason reason,
+                                                                       InflowHold.Status status);
+
     /** Large-inflow holds with no word from the customer since they started. */
     List<InflowHold> findByReasonAndStatusAndCustomerContactedAtIsNullAndStartedAtBefore(
             InflowHold.Reason reason, InflowHold.Status status, LocalDateTime before);

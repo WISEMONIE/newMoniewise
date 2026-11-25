@@ -37,6 +37,14 @@ public class WalletOpeningService {
 
     static final String ATTEMPTS_KEY = "wallet:open:attempts:";
     static final String HOLD_KEY = "wallet:open:hold:";
+    static final String LAST_ERROR_KEY = "wallet:open:last-error:";
+
+    /** After this many failures the website admin is told, once. */
+    static final int ADMIN_ALERT_ATTEMPTS = 5;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @Lazy
+    private com.moniewise.moniewise_backend.aml.AmlNotifier amlNotifier;
 
     private static final Duration FIRST_HOLD = Duration.ofMinutes(15);
     private static final Duration MAX_HOLD = Duration.ofHours(24);
@@ -264,11 +272,15 @@ public class WalletOpeningService {
             redisTemplate.expire(ATTEMPTS_KEY + userId, ATTEMPTS_TTL);
             Duration hold = holdAfter(attempts == null ? 1 : attempts, cause);
             redisTemplate.opsForValue().set(HOLD_KEY + userId, "1", hold);
+            redisTemplate.opsForValue().set(LAST_ERROR_KEY + userId, failureText(cause), ATTEMPTS_TTL);
             logger.warn("[WalletOpen] Attempt {} failed for user={}, next try in {} min: {}",
                     attempts, userId, hold.toMinutes(), cause.getMessage());
-            if (attempts != null && attempts >= 5) {
+            if (attempts != null && attempts >= ADMIN_ALERT_ATTEMPTS) {
                 logger.error("[WalletOpen] user={} still has no account after {} attempts. Needs support review.",
                         userId, attempts);
+            }
+            if (attempts != null && attempts == ADMIN_ALERT_ATTEMPTS && amlNotifier != null) {
+                amlNotifier.adminsWalletNeedsFixing();
             }
         } catch (Exception e) {
             logger.debug("[WalletOpen] Could not record failure for user={}: {}", userId, e.getMessage());
@@ -285,9 +297,56 @@ public class WalletOpeningService {
         return hold.compareTo(MAX_HOLD) > 0 ? MAX_HOLD : hold;
     }
 
+    /** What the admin site shows for a failed opening: the bank's reason when there is one. */
+    static String failureText(Exception cause) {
+        if (cause instanceof WalletProvisioningException wpe) {
+            String bank = wpe.getProviderMessage();
+            return wpe.getCode() + (bank == null || bank.isBlank() ? "" : ": " + bank);
+        }
+        String message = cause.getMessage();
+        return message == null ? cause.getClass().getSimpleName() : message;
+    }
+
+    /**
+     * Verified customers whose wallet has failed to open at least once, for
+     * the admin site's to-do list. Reads attempts and the last reason from
+     * Redis; Redis being down just leaves those fields empty.
+     */
+    public List<java.util.Map<String, Object>> failedOpenings(int limit) {
+        List<java.util.Map<String, Object>> rows = new java.util.ArrayList<>();
+        for (Long userId : userRepository.findVerifiedUserIdsWithoutFundingAccount(limit)) {
+            String attempts = redisValue(ATTEMPTS_KEY + userId);
+            if (attempts == null) {
+                continue; // not tried yet, or never failed: the retry job will handle it
+            }
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null) {
+                continue;
+            }
+            java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("userId", userId);
+            Object name = user.getProfileData() != null ? user.getProfileData().get("name") : null;
+            row.put("customerName", name == null ? "" : name.toString());
+            row.put("email", user.getEmail() == null ? "" : user.getEmail());
+            row.put("attempts", Integer.parseInt(attempts.trim()));
+            row.put("lastError", redisValue(LAST_ERROR_KEY + userId));
+            row.put("waitingForNextTry", isOnHold(userId));
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private String redisValue(String key) {
+        try {
+            return redisTemplate.opsForValue().get(key);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void clearRetryState(Long userId) {
         try {
-            redisTemplate.delete(List.of(ATTEMPTS_KEY + userId, HOLD_KEY + userId));
+            redisTemplate.delete(List.of(ATTEMPTS_KEY + userId, HOLD_KEY + userId, LAST_ERROR_KEY + userId));
         } catch (Exception ignored) {
         }
     }

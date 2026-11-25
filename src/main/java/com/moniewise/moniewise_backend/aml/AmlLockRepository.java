@@ -9,4 +9,8 @@ public interface AmlLockRepository extends Repository<InflowHold, Long> {
 
     @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(:key)", nativeQuery = true)
     Integer lock(@Param("key") long key);
+
+    /** True when this transaction got the lock; false when another server holds it. Never waits. */
+    @Query(value = "SELECT pg_try_advisory_xact_lock(:key)", nativeQuery = true)
+    Boolean tryLock(@Param("key") long key);
 }

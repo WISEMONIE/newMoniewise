@@ -82,4 +82,6 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
     Optional<Wallet> findByProviderCustomerRef(String providerCustomerRef);
     Optional<Wallet> findByAccountNumber(String accountNumber);
     List<Wallet> findByProviderName(String providerName);
+
+    List<Wallet> findTop100ByStatusOrderByUpdatedAtDesc(com.moniewise.moniewise_backend.enums.WalletStatus status);
 }
