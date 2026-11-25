@@ -78,6 +78,18 @@ import java.util.concurrent.CompletableFuture;
 @Service
 public class PayeelordVasService {
 
+    /** The AML check before money leaves (freeze, review hold, first-day limit). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.moniewise.moniewise_backend.aml.OutflowGuard outflowGuard;
+
+    private void checkOutflow(Long userId, java.math.BigDecimal amount,
+                              com.moniewise.moniewise_backend.aml.OutflowGuard.Channel channel) {
+        if (outflowGuard != null) {
+            outflowGuard.authorize(userId, amount, channel);
+        }
+    }
+
     private static final Logger logger = LoggerFactory.getLogger(PayeelordVasService.class);
     private static final String RECOVERY_ESCALATED_MARKER = "[RECOVERY_ESCALATED]";
 
@@ -141,6 +153,7 @@ public class PayeelordVasService {
         BigDecimal amount = request.getAmount();
 
         PayeelordPricingService.VasPricing pricing = pricingService.priceAirtime(amount);
+        checkOutflow(userId, pricing.sellingAmount(), com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.AIRTIME);
         String reference = buildReference("VAS-AT", userId);
 
         logger.info("[PayeelordVAS] Opening airtime purchase: user={} ref={} {}",
@@ -238,6 +251,7 @@ public class PayeelordVasService {
         }
 
         PayeelordPricingService.VasPricing pricing = pricingService.priceDataPlan(plan);
+        checkOutflow(userId, pricing.sellingAmount(), com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.DATA);
         String reference = buildReference("VAS-DT", userId);
 
         logger.info("[PayeelordVAS] Opening data purchase: user={} ref={} plan={} ({}) {}",

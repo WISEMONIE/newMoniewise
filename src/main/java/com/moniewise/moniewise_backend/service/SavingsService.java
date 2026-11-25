@@ -34,6 +34,18 @@ import java.util.UUID;
 @Service
 public class SavingsService {
 
+    /** The AML check before money leaves (freeze, review hold, first-day limit). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.moniewise.moniewise_backend.aml.OutflowGuard outflowGuard;
+
+    private void checkOutflow(Long userId, java.math.BigDecimal amount,
+                              com.moniewise.moniewise_backend.aml.OutflowGuard.Channel channel) {
+        if (outflowGuard != null) {
+            outflowGuard.authorize(userId, amount, channel);
+        }
+    }
+
     private static final Logger logger = LoggerFactory.getLogger(SavingsService.class);
     private final SavingsGoalRepository savingsGoalRepository;
     private final UserRepository userRepository;
@@ -593,6 +605,7 @@ public class SavingsService {
         if (!userService.verifyTransactionPin(sender, request.getTransactionPin())) {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
+        checkOutflow(sender.getId(), amount, com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.SAVINGS_TO_USER);
 
         User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
                 .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));

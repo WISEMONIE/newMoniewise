@@ -996,6 +996,34 @@ public class NotificationService {
         }
     }
 
+    /**
+     * Plain email with no template, for short operational messages such as
+     * payment-review notices and compliance alerts. Returns false when it
+     * could not be sent, so the caller can fall back to another channel.
+     */
+    public boolean sendPlainEmail(String to, String subject, String body) {
+        if (to == null || to.isBlank()) {
+            return false;
+        }
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Plain email '{}' not sent", subject);
+            return false;
+        }
+        try {
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, false, "UTF-8");
+            setWisemonieSender(helper);
+            helper.setTo(to.trim());
+            helper.setSubject(subject);
+            helper.setText(body, false);
+            mailSender.send(mimeMessage);
+            return true;
+        } catch (Exception e) {
+            logger.error("Failed to send plain email '{}': {}", subject, e.getMessage());
+            return false;
+        }
+    }
+
     @Async
     public void sendWelcomeEmail(String email, String firstName, String accountNumber, String bankName, BigDecimal balance) {
         if ("stub".equals(activeProfile) || mailSender == null) return;

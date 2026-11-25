@@ -53,6 +53,18 @@ import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOS
 @Service
 public class WalletService {
 
+    /** The AML check before money leaves (freeze, review hold, first-day limit). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.moniewise.moniewise_backend.aml.OutflowGuard outflowGuard;
+
+    private void checkOutflow(Long userId, java.math.BigDecimal amount,
+                              com.moniewise.moniewise_backend.aml.OutflowGuard.Channel channel) {
+        if (outflowGuard != null) {
+            outflowGuard.authorize(userId, amount, channel);
+        }
+    }
+
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
 
@@ -84,6 +96,11 @@ public class WalletService {
     private final RevenueClassificationService revenueClassificationService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** Records each credit and starts a review hold on large ones. Optional so tests can leave it out. */
+    @Autowired(required = false)
+    @Lazy
+    private com.moniewise.moniewise_backend.aml.InflowReviewService inflowReviewService;
 
     private static final String BANK_LIST_CACHE_PREFIX  = "bank_list:";
     private static final long   BANK_LIST_TTL_HOURS     = 24;
@@ -596,6 +613,7 @@ public class WalletService {
             wallet.setStatus(WalletStatus.ACTIVE);
         }
         wallet.setUpdatedAt(LocalDateTime.now());
+        wallet.setOpenedAt(LocalDateTime.now());
         wallet.setAccountNumber(virtualAccount.get("accountNumber"));
         wallet.setAccountName(virtualAccount.get("accountName"));
         wallet.setBankName(virtualAccount.get("bank"));
@@ -724,6 +742,7 @@ public class WalletService {
         if (!userService.verifyTransactionPin(sender, request.getTransactionPin())) {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
+        checkOutflow(sender.getId(), amount, com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.WISEMONIE_TRANSFER);
 
         User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
                 .orElseThrow(() -> new IllegalArgumentException("Recipient not found on Wisemonie"));
@@ -1401,6 +1420,7 @@ public class WalletService {
         if (!userService.verifyTransactionPin(user, request.getTransactionPin())) {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
+        checkOutflow(userId, request.getAmount(), com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.BANK_TRANSFER);
 
         PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
 
@@ -2955,6 +2975,7 @@ public class WalletService {
                 logger.info("[RUBIES-WEBHOOK] Processing internal P2P credit: acct={} amount={} ref={} sessionId={}",
                         creditAccountNumber, amount, reference, sessionId);
                 settleRubiesP2pCredit(wallet, internalP2pCreditLog, amount, reference, sessionId, originatorName);
+                reviewInflow(wallet, amount, reference, root, true);
                 return;
             }
 
@@ -3046,6 +3067,7 @@ public class WalletService {
                     LocalDateTime.now(),
                     isInternalP2p   // suppress notification for P2P credits
             );
+            reviewInflow(wallet, amount, reference, root, isInternalP2p);
 
         } catch (RuntimeException e) {
             throw e;
@@ -3339,5 +3361,28 @@ public class WalletService {
             return BigDecimal.ZERO;
         }
         return new BigDecimal(node.asText());
+    }
+
+    /**
+     * Hands the credit to the AML review (Rubies guide, guardrails 1 to 3).
+     * Never fails the credit: the money is already in the wallet.
+     */
+    private void reviewInflow(Wallet wallet, BigDecimal amount, String reference, JsonNode root, boolean internal) {
+        if (inflowReviewService == null || wallet == null || wallet.getUser() == null) {
+            return;
+        }
+        try {
+            inflowReviewService.recordInflow(new com.moniewise.moniewise_backend.aml.InflowReviewService.Inflow(
+                    wallet.getUser().getId(),
+                    amount,
+                    reference,
+                    root.path("originatorName").asText(null),
+                    root.path("bankName").asText(null),
+                    root.path("originatorAccountNumber").asText(null),
+                    internal));
+        } catch (Exception e) {
+            logger.error("[AML] Could not review credit ref={} for user={}: {}",
+                    reference, wallet.getUser().getId(), e.getMessage());
+        }
     }
 }

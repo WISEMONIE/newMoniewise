@@ -31,6 +31,10 @@ import java.util.UUID;
 @Service
 public class EnvelopeAutoTransferService {
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.moniewise.moniewise_backend.aml.OutflowGuard outflowGuard;
+
     private static final Logger logger = LoggerFactory.getLogger(EnvelopeAutoTransferService.class);
 
     private final EnvelopeAutoTransferRepository autoTransferRepository;
@@ -161,6 +165,20 @@ public class EnvelopeAutoTransferService {
 
         User user = config.getUser();
         Long userId = user.getId();
+
+        // A review hold or freeze keeps the money in the budget. Nothing is lost:
+        // it stays in the envelope until the review clears.
+        if (outflowGuard != null) {
+            try {
+                outflowGuard.authorize(userId, amount, com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.SCHEDULED_RELEASE);
+            } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+                logger.warn("Auto-transfer for envelope {} held: {}", envelopeId, blocked.getCode());
+                saveNotification(NotificationType.AUTO_TRANSFER_FAILED, envelope,
+                        Map.of("envelopeName", safeName(envelope), "reason", blocked.getMessage()));
+                return;
+            }
+        }
+
         Wallet wallet = walletService.getWalletByUserId(userId);
 
         if (wallet == null || wallet.getProviderWalletRef() == null) {

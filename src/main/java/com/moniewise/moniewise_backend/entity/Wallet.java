@@ -57,6 +57,10 @@ public class Wallet {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /** When the provider account opened. Null for wallets opened before this was recorded. */
+    @Column(name = "opened_at")
+    private LocalDateTime openedAt;
+
     @Column(name = "is_revenue_wallet", nullable = false)
     private boolean revenueWallet = false;
 

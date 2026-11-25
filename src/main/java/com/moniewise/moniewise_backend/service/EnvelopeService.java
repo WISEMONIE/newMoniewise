@@ -46,6 +46,18 @@ import java.util.stream.Collectors;
 @Service
 public class EnvelopeService {
 
+    /** The AML check before money leaves (freeze, review hold, first-day limit). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.moniewise.moniewise_backend.aml.OutflowGuard outflowGuard;
+
+    private void checkOutflow(Long userId, java.math.BigDecimal amount,
+                              com.moniewise.moniewise_backend.aml.OutflowGuard.Channel channel) {
+        if (outflowGuard != null) {
+            outflowGuard.authorize(userId, amount, channel);
+        }
+    }
+
     private static final Logger logger = LoggerFactory.getLogger(EnvelopeService.class);
 
     /** Rubies MFB NIP bank code — used for internal (Rubies-to-Rubies) P2P book transfers. */
@@ -344,6 +356,7 @@ public class EnvelopeService {
         if (!userService.verifyTransactionPin(sender, request.getTransactionPin())) {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
+        checkOutflow(sender.getId(), amount, com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.BUDGET_TO_USER);
 
         User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
                 .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));
@@ -990,6 +1003,7 @@ public class EnvelopeService {
         if (!userService.verifyTransactionPin(user, transactionPin)) {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
+        checkOutflow(user.getId(), amount, com.moniewise.moniewise_backend.aml.OutflowGuard.Channel.BUDGET_TO_BANK);
 
         Envelope source = envelopeRepository.findByIdAndBudgetUserEmailForUpdate(sourceId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));

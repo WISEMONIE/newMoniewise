@@ -121,6 +121,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
+    @ExceptionHandler(com.moniewise.moniewise_backend.aml.OutflowBlockedException.class)
+    public ResponseEntity<Map<String, Object>> handleOutflowBlocked(
+            com.moniewise.moniewise_backend.aml.OutflowBlockedException ex) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", ex.getStatus().value());
+        body.put("code", ex.getCode());
+        body.put("error", ex.getMessage());
+        body.put("message", ex.getMessage());
+        if (ex.getRemaining() != null) {
+            body.put("remaining", ex.getRemaining());
+        }
+        body.put("timestamp", LocalDateTime.now());
+        return ResponseEntity.status(ex.getStatus()).body(body);
+    }
+
     @ExceptionHandler(WalletProvisioningException.class)
     public ResponseEntity<Map<String, Object>> handleWalletProvisioning(WalletProvisioningException ex) {
         return ResponseEntity.status(ex.getStatus()).body(Map.of(
