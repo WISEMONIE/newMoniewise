@@ -17,6 +17,12 @@ import lombok.Setter;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class BvnVerificationResultDto {
 
+    /**
+     * Set by the BVN check endpoint: whether the wallet opened, and if not,
+     * a customer-safe reason and whether trying again can help.
+     */
+    private java.util.Map<String, Object> wallet;
+
     // ── Top-level SecureWave fields ───────────────────────────────────────────
     private String bvnNumber;
     private String nameOnCard;

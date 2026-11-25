@@ -191,7 +191,7 @@ class WalletOpeningServiceTest {
         Wallet opened = wallet("2000004444");
         when(walletService.createWalletForUser(any(User.class))).thenReturn(opened);
 
-        assertSame(opened, service.openAfterBvnCheck(USER_ID).orElseThrow());
+        assertSame(opened, service.openAfterBvnCheck(USER_ID).wallet());
     }
 
     @Test
@@ -199,7 +199,47 @@ class WalletOpeningServiceTest {
         verifiedKyc();
         when(walletService.createWalletForUser(any(User.class))).thenThrow(new RuntimeException("down"));
 
-        assertTrue(service.openAfterBvnCheck(USER_ID).isEmpty());
+        var outcome = service.openAfterBvnCheck(USER_ID);
+        assertTrue(!outcome.isOpened());
+        assertEquals("WALLET_CREATION_FAILED", outcome.code());
+        assertTrue(outcome.retryable(), "a bank outage is worth retrying");
+    }
+
+    @Test
+    void aNameMismatchTellsTheCustomerWhatToDoAndIsNotRetryable() {
+        verifiedKyc();
+        when(walletService.createWalletForUser(any(User.class)))
+                .thenThrow(WalletProvisioningException.kycIdentityMismatch("Names do not match"));
+
+        var response = service.openAfterBvnCheck(USER_ID).toResponse();
+
+        assertEquals("FAILED", response.get("status"));
+        assertEquals("WALLET_KYC_NAME_MISMATCH", response.get("code"));
+        assertEquals(false, response.get("retryable"));
+        String message = (String) response.get("message");
+        assertTrue(message.contains("contact support"), message);
+        assertTrue(!message.contains("Names do not match"), "the bank's own words stay internal");
+    }
+
+    @Test
+    void aMissingPhoneNumberIsNotRetryable() {
+        verifiedKyc();
+        user.setPhone(null);
+
+        var response = service.openAfterBvnCheck(USER_ID).toResponse();
+
+        assertEquals("WALLET_PHONE_REQUIRED", response.get("code"));
+        assertEquals(false, response.get("retryable"));
+    }
+
+    @Test
+    void anOpenedWalletSaysSoAndNothingElse() {
+        verifiedKyc();
+        when(walletService.createWalletForUser(any(User.class))).thenReturn(wallet("2000005555"));
+
+        var response = service.openAfterBvnCheck(USER_ID).toResponse();
+
+        assertEquals(java.util.Map.of("status", "OPENED"), response);
     }
 
     @Test

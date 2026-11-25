@@ -127,20 +127,57 @@ public class WalletOpeningService {
     }
 
     /**
+     * What happened to the wallet during a BVN check, for the Open Wallet
+     * screen. The message is safe to show the customer; retryable says
+     * whether "Try again" can help, or whether something else must change
+     * first (their phone number, or their BVN name with support).
+     */
+    public record OpeningOutcome(Wallet wallet, String code, String message, boolean retryable) {
+
+        static OpeningOutcome opened(Wallet wallet) {
+            return new OpeningOutcome(wallet, null, null, false);
+        }
+
+        static OpeningOutcome failed(WalletProvisioningException e) {
+            return new OpeningOutcome(null, e.getCode(), e.getUserMessage(), RETRYABLE.contains(e.getCode()));
+        }
+
+        public boolean isOpened() {
+            return wallet != null;
+        }
+
+        /** The "wallet" part of the BVN check response. */
+        public java.util.Map<String, Object> toResponse() {
+            java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("status", isOpened() ? "OPENED" : "FAILED");
+            if (!isOpened()) {
+                body.put("code", code);
+                body.put("message", message);
+                body.put("retryable", retryable);
+            }
+            return body;
+        }
+    }
+
+    /** Failures where trying again later can work. The rest need something fixed first. */
+    static final java.util.Set<String> RETRYABLE = java.util.Set.of(
+            "WALLET_CREATION_FAILED", WalletProvisioningException.OPENING_IN_PROGRESS);
+
+    /**
      * Called by the BVN check on the Open Wallet screen, the one place a user
      * asks for an account. It tries even during a wait after a failure,
-     * because the user tapped for it. It never fails the BVN check: the app
-     * reads the wallet next and shows "try again" if there is none.
+     * because the user tapped for it. It never fails the BVN check; the
+     * outcome tells the screen what happened and what the customer can do.
      */
-    public Optional<Wallet> openAfterBvnCheck(Long userId) {
-        if (userId == null) {
-            return Optional.empty();
-        }
+    public OpeningOutcome openAfterBvnCheck(Long userId) {
         try {
-            return Optional.of(openFromVerifiedKyc(userId));
+            return OpeningOutcome.opened(openFromVerifiedKyc(userId));
+        } catch (WalletProvisioningException e) {
+            logger.warn("[WalletOpen] BVN check could not open a wallet for user={}: {}", userId, e.getCode());
+            return OpeningOutcome.failed(e);
         } catch (RuntimeException e) {
             logger.warn("[WalletOpen] BVN check could not open a wallet for user={}: {}", userId, e.getMessage());
-            return Optional.empty();
+            return OpeningOutcome.failed(WalletProvisioningException.providerUnavailable(e.getMessage()));
         }
     }
 

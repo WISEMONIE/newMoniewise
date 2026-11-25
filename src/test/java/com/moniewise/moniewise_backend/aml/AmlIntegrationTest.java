@@ -330,6 +330,41 @@ class AmlIntegrationTest {
         }
     }
 
+    // ── The Open Wallet screen ─────────────────────────────────────────────
+
+    @Test
+    void theBvnCheckTellsTheScreenWhyTheWalletDidNotOpen() throws Exception {
+        Customer c = established();
+        // A placeholder wallet with no account yet, as before the bank opens one.
+        jdbc.update("UPDATE wallets SET account_number = NULL WHERE id = ?", c.wallet().getId());
+        String bvn = kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(c.id()).orElseThrow().getBvn();
+        PaymentGateway gateway = mock(PaymentGateway.class);
+        when(paymentGatewayResolver.resolveDefault()).thenReturn(gateway);
+        when(gateway.createVirtualAccount(any())).thenThrow(
+                com.moniewise.moniewise_backend.exception.WalletProvisioningException.kycIdentityMismatch("Names do not match"));
+
+        mvc.perform(post("/api/kyc/bvn/verify").with(user(c.user().getEmail()).roles("USER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"bvn\":\"" + bvn + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.firstName").value("EMMANUEL"))
+                .andExpect(jsonPath("$.wallet.status").value("FAILED"))
+                .andExpect(jsonPath("$.wallet.code").value("WALLET_KYC_NAME_MISMATCH"))
+                .andExpect(jsonPath("$.wallet.retryable").value(false))
+                .andExpect(jsonPath("$.wallet.message").value(org.hamcrest.Matchers.containsString("contact support")));
+    }
+
+    @Test
+    void theBvnCheckSaysOpenedWhenTheWalletIsThere() throws Exception {
+        Customer c = established();
+        String bvn = kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(c.id()).orElseThrow().getBvn();
+
+        mvc.perform(post("/api/kyc/bvn/verify").with(user(c.user().getEmail()).roles("USER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"bvn\":\"" + bvn + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.wallet.status").value("OPENED"))
+                .andExpect(jsonPath("$.wallet.code").doesNotExist());
+    }
+
     // ── Admin tools and security ───────────────────────────────────────────
 
     @Test
