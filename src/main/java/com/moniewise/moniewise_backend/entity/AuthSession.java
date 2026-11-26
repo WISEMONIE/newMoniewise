@@ -39,6 +39,21 @@ public class AuthSession {
     @Column(name = "revoked_at")
     private LocalDateTime revokedAt;
 
+    /** APP for the phone app, SITE_ADMIN for the website admin. One active session of each per user. */
+    @Column(name = "kind", nullable = false, length = 20)
+    private String kind = KIND_APP;
+
+    public static final String KIND_APP = "APP";
+    public static final String KIND_SITE_ADMIN = "SITE_ADMIN";
+
+    public String getKind() {
+        return kind;
+    }
+
+    public void setKind(String kind) {
+        this.kind = kind;
+    }
+
     public Long getId() {
         return id;
     }
