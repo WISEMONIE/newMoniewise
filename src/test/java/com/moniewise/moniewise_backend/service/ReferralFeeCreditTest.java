@@ -5,7 +5,10 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.ReferralRewardRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -33,13 +36,17 @@ class ReferralFeeCreditTest {
     @Mock private ReferralRewardRepository referralRewardRepository;
     @Mock private BudgetRepository budgetRepository;
     @Mock private SystemConfigService systemConfig;
+    @Mock private StringRedisTemplate redis;
+    @Mock private ValueOperations<String, String> redisValues;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private ReferralService service;
 
     @BeforeEach
     void setUp() {
         service = new ReferralService(
-                userRepository, referralRewardRepository, budgetRepository, systemConfig);
+                userRepository, referralRewardRepository, budgetRepository, systemConfig,
+                redis, objectMapper);
     }
 
     @Test
@@ -201,5 +208,96 @@ class ReferralFeeCreditTest {
         User user = new User();
         user.setId(id);
         return user;
+    }
+    @Test
+    @SuppressWarnings("unchecked")
+    void theTermsUseTheLiveSetupFee() {
+        when(systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO))
+                .thenReturn(new BigDecimal("1500"));
+
+        Map<String, Object> terms = service.buildTerms();
+
+        assertTrue(terms.get("summary").toString().contains("₦1,500"), terms.toString());
+        List<Map<String, Object>> sections = (List<Map<String, Object>>) terms.get("sections");
+        assertEquals(List.of("Who can take part", "How you earn", "How your credit is used", "Good to know"),
+                sections.stream().map(s -> s.get("title")).toList());
+        List<String> used = (List<String>) sections.get(2).get("points");
+        assertTrue(used.get(0).contains("₦1,500 off the setup fee"), used.toString());
+        assertEquals(ReferralService.TERMS_VERSION, terms.get("version"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void withNoSetupFeeTheTermsDoNotShowZeroNaira() {
+        when(systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO))
+                .thenReturn(BigDecimal.ZERO);
+
+        String all = service.buildTerms().toString();
+
+        assertFalse(all.contains("₦0"), all);
+        assertTrue(all.contains("waived"), all);
+    }
+
+    @Test
+    void nairaAmountsAreGroupedWithoutTrailingZeros() {
+        assertEquals("₦200", ReferralService.naira(new BigDecimal("200.00")));
+        assertEquals("₦1,250.5", ReferralService.naira(new BigDecimal("1250.50")));
+    }
+
+    @Test
+    void cachedTermsAreServedFromRedisWithoutRebuilding() {
+        when(redis.opsForValue()).thenReturn(redisValues);
+        when(redisValues.get(ReferralService.TERMS_CACHE_KEY))
+                .thenReturn("{\"title\":\"Refer & Earn terms\",\"version\":\"cached\"}");
+
+        Map<String, Object> terms = service.terms();
+
+        assertEquals("cached", terms.get("version"));
+        verify(systemConfig, never()).getBigDecimal(any(), any());
+        verify(redisValues, never()).set(any(), any(), any(java.time.Duration.class));
+    }
+
+    @Test
+    void aMissBuildsTheTermsAndCachesThemForFifteenMinutes() throws Exception {
+        when(redis.opsForValue()).thenReturn(redisValues);
+        when(systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO))
+                .thenReturn(new BigDecimal("200"));
+
+        Map<String, Object> terms = service.terms();
+
+        ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+        verify(redisValues).set(org.mockito.ArgumentMatchers.eq(ReferralService.TERMS_CACHE_KEY), json.capture(),
+                org.mockito.ArgumentMatchers.eq(java.time.Duration.ofMinutes(15)));
+        assertEquals(objectMapper.writeValueAsString(terms), json.getValue());
+        assertTrue(ReferralService.TERMS_CACHE_KEY.endsWith(ReferralService.TERMS_VERSION));
+    }
+
+    @Test
+    void whenRedisIsDownTheTermsStillLoad() {
+        when(redis.opsForValue()).thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("down"));
+        when(systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO))
+                .thenReturn(new BigDecimal("200"));
+
+        Map<String, Object> terms = service.terms();
+
+        assertEquals(ReferralService.TERMS_VERSION, terms.get("version"));
+    }
+
+    @Test
+    void aReferrerWithNoBudgetSeesTheirWaitingCredit() {
+        User referrer = new User();
+        referrer.setId(7L);
+        referrer.setReferralCode("ABCD2345");
+        when(systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO))
+                .thenReturn(new BigDecimal("200"));
+        when(referralRewardRepository.countByReferrerUserIdAndStatus(7L, ReferralReward.EARNED)).thenReturn(0L);
+        when(referralRewardRepository.countByReferrerUserIdAndStatus(7L, ReferralReward.USED)).thenReturn(0L);
+        when(referralRewardRepository.countByReferrerUserIdAndStatus(7L, ReferralReward.PENDING)).thenReturn(1L);
+
+        Map<String, Object> summary = service.summary(referrer);
+
+        assertEquals(0L, summary.get("availableCredits"));
+        assertEquals(1L, summary.get("pendingCredits"));
+        assertEquals(1L, summary.get("earnedCount"), "the friend who funded a budget still counts");
     }
 }
