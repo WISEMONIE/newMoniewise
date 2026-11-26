@@ -71,6 +71,12 @@ public class AdminNotificationController {
         return adminBroadcastService.audienceSize(includeTestAccounts);
     }
 
+    /** What reached a phone, what is waiting or failed, per recent broadcast; and whether the queue moves. */
+    @org.springframework.web.bind.annotation.GetMapping("/delivery")
+    public java.util.Map<String, Object> delivery() {
+        return adminBroadcastService.delivery();
+    }
+
     /** The last 100 broadcasts, newest first. */
     @org.springframework.web.bind.annotation.GetMapping("/history")
     public java.util.List<com.moniewise.moniewise_backend.entity.AdminBroadcast> history() {

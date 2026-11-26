@@ -89,11 +89,23 @@ class AdminPushIntegrationTest {
                 + "\"emails\":[\"" + email + "\"]}";
     }
 
-    private String sentJson() throws Exception {
+    /**
+     * The message sent to this customer's phone. Other tests can leave pushes
+     * queued that a background worker sends meanwhile, so pick ours by token.
+     */
+    private String sentJson(User customer) throws Exception {
+        String token = jdbc.queryForObject(
+                "SELECT fcm_token FROM auth_sessions WHERE user_id = ? AND revoked = false", String.class, customer.getId());
         ArgumentCaptor<Message> sent = ArgumentCaptor.forClass(Message.class);
         verify(firebase, atLeastOnce()).send(sent.capture());
         // The same JSON form the SDK sends to Google.
-        return GsonFactory.getDefaultInstance().toString(sent.getValue());
+        for (Message m : sent.getAllValues()) {
+            String json = GsonFactory.getDefaultInstance().toString(m);
+            if (json.contains("\"token\":\"" + token + "\"")) {
+                return json;
+            }
+        }
+        throw new AssertionError("No push was sent to " + customer.getEmail());
     }
 
     @Test
@@ -106,7 +118,7 @@ class AdminPushIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.recipients").value(1));
 
-        String json = sentJson();
+        String json = sentJson(customer);
         assertTrue(json.contains("\"notification\":{\"body\":\"Plan your weekend spend with Wisemonie.\",\"image\":\""),
                 "the system tray picture: " + json);
         assertTrue(json.matches("(?s).*\"android\":\\{.*\"notification\":\\{.*\"image\":\"https://firebasestorage.*"),
@@ -129,7 +141,7 @@ class AdminPushIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON).content(body(customer.getEmail(), null)))
                 .andExpect(status().isOk());
 
-        String json = sentJson();
+        String json = sentJson(customer);
         assertFalse(json.contains("\"image\""), json);
         assertFalse(json.contains("mutable-content"), json);
         assertFalse(json.contains("imageUrl"), json);

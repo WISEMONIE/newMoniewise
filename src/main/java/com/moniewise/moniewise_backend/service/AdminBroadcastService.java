@@ -175,7 +175,8 @@ public class AdminBroadcastService {
                         pushActionType,
                         ctaUrl,
                         ttlSeconds,
-                        imageUrl
+                        imageUrl,
+                        history.getId()
                 );
                 fcmQueued++;
                 if (deliverNow && eventId != null) {
@@ -329,6 +330,78 @@ public class AdminBroadcastService {
                 "allUsers", userRepository.countBroadcastRecipients(includeTestAccounts),
                 "reachableByPush", userRepository.countBroadcastPushReachable(includeTestAccounts));
     }
+
+    /** Queued bulk pushes older than this mean the sender is not running. */
+    static final long STUCK_AFTER_MINUTES = 10;
+
+    /**
+     * What happened to the pushes of the recent broadcasts, and whether the
+     * queue that sends big broadcasts is moving.
+     *
+     * <ul>
+     *   <li>sent: Firebase accepted it for at least one of the person's phones</li>
+     *   <li>noPhone: no phone signed in with notifications on; it is in their app inbox</li>
+     *   <li>waiting: still queued</li>
+     *   <li>expired: not sent in time, or the account was closed</li>
+     *   <li>failed: Firebase kept refusing it</li>
+     * </ul>
+     */
+    public Map<String, Object> delivery() {
+        List<Long> ids = broadcastHistory.findTop100ByOrderByCreatedAtDesc().stream()
+                .map(AdminBroadcast::getId).toList();
+        Map<String, Map<String, Long>> byBroadcast = new LinkedHashMap<>();
+        if (!ids.isEmpty()) {
+            for (Object[] row : outboxEventRepository.countBroadcastDelivery(ids)) {
+                String id = String.valueOf(((Number) row[0]).longValue());
+                String bucket = deliveryBucket(String.valueOf(row[1]), Boolean.TRUE.equals(row[2]));
+                long count = ((Number) row[3]).longValue();
+                byBroadcast.computeIfAbsent(id, k -> emptyDelivery()).merge(bucket, count, Long::sum);
+            }
+        }
+        Object[] queue = outboxEventRepository.bulkQueueState().get(0);
+        long waiting = ((Number) queue[0]).longValue();
+        java.time.LocalDateTime oldest = toLocalDateTime(queue[1]);
+        long oldestMinutes = oldest == null ? 0
+                : java.time.Duration.between(oldest, java.time.LocalDateTime.now()).toMinutes();
+        Map<String, Object> queueState = new LinkedHashMap<>();
+        queueState.put("waiting", waiting);
+        queueState.put("oldestWaitingMinutes", oldestMinutes);
+        queueState.put("stuck", waiting > 0 && oldestMinutes >= STUCK_AFTER_MINUTES);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("broadcasts", byBroadcast);
+        body.put("queue", queueState);
+        return body;
+    }
+
+    static String deliveryBucket(String status, boolean reachedAPhone) {
+        return switch (status) {
+            case "PENDING", "PROCESSING" -> "waiting";
+            case "PROCESSED" -> reachedAPhone ? "sent" : "noPhone";
+            case "FAILED" -> "failed";
+            default -> "expired";
+        };
+    }
+
+    private static Map<String, Long> emptyDelivery() {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (String bucket : List.of("sent", "noPhone", "waiting", "expired", "failed")) {
+            counts.put(bucket, 0L);
+        }
+        return counts;
+    }
+
+    private static java.time.LocalDateTime toLocalDateTime(Object value) {
+        if (value instanceof java.sql.Timestamp ts) {
+            return ts.toLocalDateTime();
+        }
+        if (value instanceof java.time.LocalDateTime ldt) {
+            return ldt;
+        }
+        return null;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.moniewise.moniewise_backend.repository.OutboxEventRepository outboxEventRepository;
 
     public List<AdminBroadcast> history() {
         return broadcastHistory.findTop100ByOrderByCreatedAtDesc();

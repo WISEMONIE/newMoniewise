@@ -31,7 +31,8 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
                 ttl_seconds,
                 inbox_saved,
                 delivered_tokens,
-                priority
+                priority,
+                broadcast_id
             FROM outbox_events
             WHERE (
                 (
@@ -50,6 +51,26 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
     List<OutboxEvent> claimPendingEvents(@Param("limit") int limit);
+
+    /** Per broadcast: status, whether a phone got it, and how many. */
+    @Query(value = """
+            SELECT broadcast_id,
+                   status,
+                   (delivered_tokens IS NOT NULL AND delivered_tokens <> '') AS reached,
+                   COUNT(*)
+            FROM outbox_events
+            WHERE broadcast_id IN (:ids)
+            GROUP BY broadcast_id, status, reached
+            """, nativeQuery = true)
+    List<Object[]> countBroadcastDelivery(@Param("ids") java.util.Collection<Long> ids);
+
+    /** Bulk pushes still queued, and when the oldest was queued. */
+    @Query(value = """
+            SELECT COUNT(*), MIN(created_at)
+            FROM outbox_events
+            WHERE status IN ('PENDING', 'PROCESSING') AND priority = 1
+            """, nativeQuery = true)
+    List<Object[]> bulkQueueState();
 
     /** Count of events in a given status — used for dead-letter (FAILED) visibility. */
     long countByStatus(String status);
