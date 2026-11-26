@@ -1,43 +1,3 @@
-//package com.moniewise.moniewise_backend.entity;
-//
-//import lombok.Getter;
-//import lombok.Setter;
-//import lombok.NoArgsConstructor;
-//import lombok.AllArgsConstructor;
-//
-//import javax.persistence.*;
-//import java.math.BigDecimal;
-//import java.time.LocalDateTime;
-//
-//
-//@Entity
-//@Getter
-//@Setter
-//@NoArgsConstructor
-//@AllArgsConstructor
-//@Table(name = "revenue_logs")
-//public class RevenueLog {
-//    @Id
-//    @GeneratedValue(strategy = GenerationType.IDENTITY)
-//    private Long id;
-//
-//    @Column(name = "user_id", nullable = false)
-//    private Long userId;
-//
-//    @Column(nullable = false)
-//    private String type; // e.g., "budget_creation", "movement_fee"
-//
-//    @Column(nullable = false)
-//    private BigDecimal amount;
-//
-//    @Column
-//    private String description;
-//
-//    @Column(name = "created_at")
-//    private LocalDateTime createdAt = LocalDateTime.now();
-//
-//}
-
 package com.moniewise.moniewise_backend.entity;
 
 import javax.persistence.*;
@@ -54,18 +14,17 @@ public class RevenueLog {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "type", nullable = false, length = 50) // Updated length
+    @Column(name = "type", nullable = false, length = 50)
     private String type;
-
 
     @Column(nullable = false)
     private BigDecimal amount;
 
-    @Column(name = "description", nullable = false, length = 255) // Updated length
+    @Column(name = "description", nullable = false, length = 255)
     private String description;
 
-    @Column(name = "created_at")
-    private LocalDateTime createdAt = LocalDateTime.now();
+    @Column(name = "created_at", nullable = false, columnDefinition = "TIMESTAMPTZ")
+    private LocalDateTime createdAt;
 
     // Constructors
     public RevenueLog() {}
@@ -75,6 +34,7 @@ public class RevenueLog {
         this.type = type;
         this.amount = amount;
         this.description = description;
+        // createdAt set via setCreatedAt() in service
     }
 
     // Getters and Setters

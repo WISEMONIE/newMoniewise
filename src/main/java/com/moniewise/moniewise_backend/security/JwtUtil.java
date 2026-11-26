@@ -74,12 +74,55 @@ public class JwtUtil {
     }
 
     // Generate token with proper expiration
-    public String generateToken(UserDetails userDetails) {
+    public String generateToken(UserDetails userDetails, String sessionId) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("role", userDetails.getAuthorities().stream()
                 .map(grantedAuthority -> grantedAuthority.getAuthority())
                 .collect(Collectors.joining(",")));
+        claims.put("sessionId", sessionId);
         return createToken(claims, userDetails.getUsername());
+    }
+
+    public String generateBlogAdminToken(UserDetails userDetails, String sessionId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "ROLE_ADMIN");
+        claims.put("sessionId", sessionId);
+        claims.put("scope", "blog");
+        return createToken(claims, userDetails.getUsername());
+    }
+
+    /** The website admin scope: blog and payment reviews, nothing else. */
+    public static final String SITE_ADMIN_SCOPE = "site-admin";
+
+    /**
+     * A short-lived token for the website admin. It only works on
+     * /admin/blog and /admin/aml (see BlogScopeFilter).
+     */
+    public String generateSiteAdminToken(UserDetails userDetails, String sessionId, long ttlMillis) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "ROLE_ADMIN");
+        claims.put("sessionId", sessionId);
+        claims.put("scope", SITE_ADMIN_SCOPE);
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(userDetails.getUsername())
+                .setIssuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + ttlMillis))
+                .signWith(SignatureAlgorithm.HS512, secret)
+                .compact();
+    }
+
+    public String extractScope(String token) {
+        try {
+            return extractClaim(token, claims -> claims.get("scope", String.class));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // 👇 ADD THIS METHOD TO JwtUtil.java
+    public String extractSessionId(String token) {
+        return extractClaim(token, claims -> claims.get("sessionId", String.class));
     }
 
     private String createToken(Map<String, Object> claims, String subject) {

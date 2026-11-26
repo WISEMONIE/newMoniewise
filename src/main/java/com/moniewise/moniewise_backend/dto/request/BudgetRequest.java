@@ -1,5 +1,7 @@
 package com.moniewise.moniewise_backend.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.sun.istack.NotNull;
 import lombok.Getter;
 import lombok.Setter;
@@ -17,6 +19,7 @@ import java.util.List;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class BudgetRequest {
     private String name;
 
@@ -24,9 +27,10 @@ public class BudgetRequest {
     private Integer durationDays;
     private LocalDate startDate;
     private LocalDate endDate;
-    private String status; // String for input, converted to BudgetStatus
+    private BudgetStatus status; // String for input, converted to BudgetStatus
 
     @NotEmpty
     private List<EnvelopeRequest> envelopes;
 
+    private Boolean termsAccepted;
 }

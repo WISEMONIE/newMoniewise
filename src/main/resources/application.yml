@@ -1,0 +1,50 @@
+moniewise:
+  runtime:
+    role: ${MONIEWISE_RUNTIME_ROLE:all}
+  scheduler:
+    pool-size: ${MONIEWISE_SCHEDULER_POOL_SIZE:2}
+    critical-tasks:
+      fixed-rate-ms: ${MONIEWISE_SCHEDULER_CRITICAL_TASKS_FIXED_RATE_MS:30000}
+      batch-size: ${MONIEWISE_SCHEDULER_CRITICAL_TASKS_BATCH_SIZE:50}
+      max-loops: ${MONIEWISE_SCHEDULER_CRITICAL_TASKS_MAX_LOOPS:10}
+    scheduled-budget-activation:
+      batch-size: ${MONIEWISE_SCHEDULER_SCHEDULED_BUDGET_ACTIVATION_BATCH_SIZE:50}
+      max-loops: ${MONIEWISE_SCHEDULER_SCHEDULED_BUDGET_ACTIVATION_MAX_LOOPS:10}
+    budget-expiry:
+      batch-size: ${MONIEWISE_SCHEDULER_BUDGET_EXPIRY_BATCH_SIZE:50}
+      max-loops: ${MONIEWISE_SCHEDULER_BUDGET_EXPIRY_MAX_LOOPS:10}
+    pending-disbursement:
+      fixed-rate-ms: ${MONIEWISE_SCHEDULER_PENDING_DISBURSEMENT_FIXED_RATE_MS:120000}
+  outbox:
+    worker:
+      batch-size: ${MONIEWISE_OUTBOX_WORKER_BATCH_SIZE:50}
+      fixed-delay-ms: ${MONIEWISE_OUTBOX_WORKER_FIXED_DELAY_MS:5000}
+    deadletter:
+      alert-ms: ${MONIEWISE_OUTBOX_DEADLETTER_ALERT_MS:900000}
+  vas:
+    recovery:
+      fixed-delay-ms: ${MONIEWISE_VAS_RECOVERY_FIXED_DELAY_MS:300000}
+      batch-size: ${MONIEWISE_VAS_RECOVERY_BATCH_SIZE:25}
+
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: ${HIKARI_MAX_POOL_SIZE:20}
+      minimum-idle: ${HIKARI_MIN_IDLE:5}
+      connection-timeout: ${HIKARI_CONNECTION_TIMEOUT:20000}
+      idle-timeout: ${HIKARI_IDLE_TIMEOUT_MS:${HIKARI_IDLE_TIMEOUT:240000}}
+      max-lifetime: ${HIKARI_MAX_LIFETIME_MS:${HIKARI_MAX_LIFETIME:300000}}
+      leak-detection-threshold: ${HIKARI_LEAK_DETECTION:30000}
+      keepalive-time: ${HIKARI_KEEPALIVE_TIME_MS:${HIKARI_KEEPALIVE:30000}}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: moniewise-backend

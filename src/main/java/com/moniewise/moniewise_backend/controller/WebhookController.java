@@ -1,73 +1,149 @@
 package com.moniewise.moniewise_backend.controller;
 
-import com.moniewise.moniewise_backend.service.WalletService;
+import com.moniewise.moniewise_backend.service.WebhookService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
-import java.util.Map;
+import javax.servlet.http.HttpServletRequest;
 
 @RestController
-@RequestMapping("/webhooks")
+@RequestMapping("/api/webhooks")
 public class WebhookController {
 
     private static final Logger logger = LoggerFactory.getLogger(WebhookController.class);
+    private final WebhookService webhookService;
 
-    private final WalletService walletService;
-    private final String paystackSecretKey;
-
-    public WebhookController(WalletService walletService, @Value("${paystack.secret.key}") String paystackSecretKey) {
-        this.walletService = walletService;
-        this.paystackSecretKey = paystackSecretKey;
+    public WebhookController(WebhookService webhookService) {
+        this.webhookService = webhookService;
     }
 
-    @PostMapping("/paystack")
-    public ResponseEntity<?> handlePaystackWebhook(
-            @RequestHeader("x-paystack-signature") String signature,
-            @RequestBody Map<String, Object> payload
-    ) {
+    @PostMapping("/securewave")
+    public ResponseEntity<String> handleSecureWaveWebhook(
+            @RequestHeader(value = "X-Signature", required = false) String signature,
+            @RequestBody String rawPayload) {
+
+        logger.info("Received webhook from SecureWave");
+
+        if (signature == null || signature.isEmpty()) {
+            logger.warn("Missing X-Signature in webhook request");
+            return ResponseEntity.badRequest().body("Missing signature");
+        }
+
         try {
-            // Verify signature
-            String computedSignature = computePaystackSignature(payload.toString());
-            if (!computedSignature.equals(signature)) {
-                logger.warn("Invalid Paystack signature");
-                return ResponseEntity.status(401).body(Map.of("error", "Invalid signature"));
-            }
-
-            String event = (String) payload.get("event");
-            if ("charge.success".equals(event)) {
-                Map<String, Object> data = (Map<String, Object>) payload.get("data");
-                BigDecimal amount = new BigDecimal(data.get("amount").toString()).divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
-                Long userId = Long.parseLong((String) data.get("metadata.userId"));
-                walletService.fundWallet(userId, amount);
-                logger.info("Processed Paystack charge.success for user {}: ₦{}", userId, amount);
-            }
-            return ResponseEntity.ok().build();
+            webhookService.processSecureWaveWebhook(signature, rawPayload);
+            return ResponseEntity.ok("Webhook received");
+        } catch (SecurityException e) {
+            logger.warn("Rejected SecureWave webhook: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
         } catch (Exception e) {
-            logger.error("Webhook error: {}", e.getMessage());
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            logger.error("Webhook processing failed", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Webhook processing failed");
         }
     }
 
-    private String computePaystackSignature(String payload) throws NoSuchAlgorithmException, InvalidKeyException {
-        Mac mac = Mac.getInstance("HmacSHA512");
-        SecretKeySpec secretKeySpec = new SecretKeySpec(paystackSecretKey.getBytes(StandardCharsets.UTF_8), "HmacSHA512");
-        mac.init(secretKeySpec);
-        byte[] hash = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : hash) {
-            String hex = Integer.toHexString(0xff & b);
-            if (hex.length() == 1) hexString.append('0');
-            hexString.append(hex);
+    /**
+     * Providus webhook receiver.
+     *
+     * <p>Providus has not yet documented which header they use for the signature so
+     * this endpoint accepts several common candidates
+     * ({@code X-Providus-Signature}, {@code X-Signature}, {@code X-Webhook-Signature}).
+     * The first non-blank value found is forwarded to the gateway for validation.
+     *
+     * <p>The endpoint always returns {@code 200 OK} as long as the payload is valid
+     * JSON so Providus does not retry already-processed events.  Signature failures
+     * return {@code 401} so Providus knows the request was received but rejected.
+     *
+     * <p><b>Give Providus this URL:</b>
+     * {@code https://your-render-domain.onrender.com/api/webhooks/providus}
+     */
+    @PostMapping("/providus")
+    public ResponseEntity<String> handleProvidusWebhook(
+            @RequestHeader(value = "X-Providus-Signature", required = false) String providusSig,
+            @RequestHeader(value = "X-Signature",          required = false) String xSig,
+            @RequestHeader(value = "X-Webhook-Signature",  required = false) String webhookSig,
+            @RequestBody String rawPayload) {
+
+        logger.info("[PROVIDUS-WEBHOOK] Received webhook call");
+
+        // Accept whichever signature header Providus actually sends
+        String signature = firstPresent(providusSig, xSig, webhookSig);
+        if (signature == null) {
+            // No signature at all — the gateway rejects it; forwarded so the attempt is still logged
+            logger.warn("[PROVIDUS-WEBHOOK] No signature header present — it will be rejected");
         }
-        return hexString.toString();
+
+        try {
+            webhookService.processProvidusWebhook(signature, rawPayload);
+            return ResponseEntity.ok("Webhook received");
+        } catch (SecurityException e) {
+            logger.warn("[PROVIDUS-WEBHOOK] Rejected — {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
+        } catch (Exception e) {
+            logger.error("[PROVIDUS-WEBHOOK] Processing failed", e);
+            // Return 200 so Providus does not retry; the raw payload is already persisted
+            // in webhook_events with status=FAILED for manual review
+            return ResponseEntity.ok("Webhook received (processing error logged)");
+        }
+    }
+
+    /**
+     * Rubies MFB webhook receiver.
+     *
+     * <p>Two verification mechanisms are supported (see
+     * {@link WebhookService#processRubiesWebhook} for the precedence rules):
+     * <ul>
+     *   <li><b>Custom header key/value</b> — Rubies' dashboard lets you configure
+     *       a "Live Header Key"/"Live Header Value" pair that it echoes on every
+     *       webhook call. Configured via the {@code RUBIES_WEBHOOK_HEADER_KEY} /
+     *       {@code RUBIES_WEBHOOK_HEADER_VALUE} env vars (same place as
+     *       {@code RUBIES_WEBHOOK_SECRET} — Render → Environment). Since the
+     *       header *name* itself is admin-chosen, it can't be statically
+     *       declared with {@code @RequestHeader} — we pass the raw
+     *       {@link HttpServletRequest} through so the service can look it up by
+     *       whatever name is currently configured.</li>
+     *   <li><b>Legacy HMAC signature</b> — {@code X-Rubies-Signature} (or the
+     *       generic {@code X-Signature} fallback), validated against
+     *       {@code RUBIES_WEBHOOK_SECRET}. Kept only as a fallback for
+     *       deployments that haven't set the header env vars yet — Rubies' own
+     *       webhook docs don't describe any payload-signing scheme, so real
+     *       production webhooks will never carry this header.</li>
+     * </ul>
+     *
+     * <p><b>Give Rubies this URL:</b>
+     * {@code https://your-render-domain.onrender.com/api/webhooks/rubies}
+     */
+    @PostMapping("/rubies")
+    public ResponseEntity<String> handleRubiesWebhook(
+            @RequestHeader(value = "X-Rubies-Signature", required = false) String rubiesSig,
+            @RequestHeader(value = "X-Signature",        required = false) String xSig,
+            @RequestBody String rawPayload,
+            HttpServletRequest httpRequest) {
+
+        logger.info("[RUBIES-WEBHOOK] Received webhook call");
+
+        String signature = firstPresent(rubiesSig, xSig);
+
+        try {
+            webhookService.processRubiesWebhook(signature, rawPayload, httpRequest);
+            return ResponseEntity.ok("Webhook received");
+        } catch (SecurityException e) {
+            logger.warn("[RUBIES-WEBHOOK] Rejected — {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Processing failed", e);
+            // Return 200 so Rubies does not retry; raw payload is persisted in webhook_events
+            return ResponseEntity.ok("Webhook received (processing error logged)");
+        }
+    }
+
+    /** Returns the first non-blank value from the given candidates, or {@code null}. */
+    private String firstPresent(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.isBlank()) return c;
+        }
+        return null;
     }
 }

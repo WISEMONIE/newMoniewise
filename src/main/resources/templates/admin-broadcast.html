@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title th:text="${subject}">Wisemonie update</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background-color: #F4F6F5;
+      padding: 40px 16px;
+      -webkit-text-size-adjust: none;
+      color: #344054;
+    }
+    .wrapper { max-width: 580px; margin: 0 auto; }
+    .logo-bar { text-align: center; padding-bottom: 28px; }
+    .card {
+      background: #FFFFFF;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #EAECF0;
+    }
+    .accent { height: 6px; background-color: #0F4C4C; }
+    .card-body { padding: 36px 38px 34px; }
+    .tag-line {
+      display: inline-block;
+      background-color: #E8F5F1;
+      color: #0F4C4C;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      margin-bottom: 16px;
+    }
+    .headline {
+      font-size: 24px;
+      font-weight: 700;
+      color: #101828;
+      line-height: 1.28;
+      margin-bottom: 18px;
+    }
+    .body-text {
+      font-size: 15px;
+      color: #475467;
+      line-height: 1.7;
+      margin-bottom: 14px;
+      white-space: pre-line;
+    }
+    .footer-note {
+      font-size: 14px;
+      color: #667085;
+      line-height: 1.7;
+      margin-top: 18px;
+      margin-bottom: 22px;
+    }
+    .btn-cta {
+      display: inline-block;
+      background-color: #0F4C4C;
+      color: #FFFFFF !important;
+      text-decoration: none;
+      font-weight: 700;
+      border-radius: 8px;
+      padding: 13px 22px;
+      font-size: 14px;
+    }
+    .divider { border: none; border-top: 1px solid #F2F4F7; margin: 0; }
+    .card-footer {
+      padding: 22px 38px;
+      text-align: center;
+    }
+    .footer-text {
+      font-size: 12px;
+      color: #98A2B3;
+      line-height: 1.6;
+      margin-bottom: 14px;
+    }
+    .social-row { text-align: center; margin-bottom: 4px; }
+    .social-row a {
+      display: inline-block;
+      margin: 0 8px;
+      font-size: 12px;
+      color: #667085;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .outer-footer {
+      text-align: center;
+      margin-top: 22px;
+      font-size: 11px;
+      color: #98A2B3;
+    }
+    @media only screen and (max-width: 600px) {
+      body { padding: 20px 12px; }
+      .card-body { padding: 28px 24px 24px; }
+      .card-footer { padding: 20px 24px; }
+      .headline { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="logo-bar">
+    <img th:src="${logoUrl}" src="https://wisemonie-backend.onrender.com/images/main_logo.png" alt="Wisemonie" style="width: 100%; height: auto; display: block;">
+  </div>
+
+  <div class="card">
+    <div class="accent"></div>
+    <div class="card-body">
+      <div class="tag-line" th:text="${tag}">Service alert</div>
+      <h1 class="headline" th:text="${title}">Wisemonie update</h1>
+
+      <p class="body-text">
+        Hi <span th:text="${firstName}">there</span>,
+      </p>
+      <p class="body-text" th:text="${body}">
+        We have an update for you.
+      </p>
+      <p class="footer-note" th:text="${footerNote}">
+        Thank you for using Wisemonie.
+      </p>
+
+      <a th:if="${hasCta}" th:href="${ctaUrl}" class="btn-cta" th:text="${ctaLabel}">Open Wisemonie</a>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="card-footer">
+      <p class="footer-text">
+        You are receiving this because you have a Wisemonie account.
+      </p>
+      <div class="social-row">
+        <a href="https://instagram.com/wisemonie_app">Instagram</a>
+        <a href="https://x.com/wisemonie_app">X</a>
+        <a href="https://tiktok.com/@wisemonie_app">TikTok</a>
+        <a href="https://whatsapp.com/channel/0029Vb6kU683bbUy3azQF047">WhatsApp</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="outer-footer">
+    &copy; <span th:text="${T(java.time.Year).now().getValue()}">2026</span> Wisemonie. All rights reserved.
+  </div>
+</div>
+</body>
+</html>

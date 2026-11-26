@@ -18,12 +18,17 @@ public class CustomUserDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        User user = userRepository.findByEmail(email)
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found: " + email));
+        // Build the Spring Security authority from the User's actual Role enum.
+        // Spring's hasRole('ADMIN') internally checks for the "ROLE_ADMIN" authority,
+        // so we must prefix with "ROLE_". Never hardcode a fixed role here — that
+        // would silently prevent any admin from accessing protected endpoints.
+        String authority = "ROLE_" + user.getRole().name();   // e.g. "ROLE_USER", "ROLE_ADMIN"
         return org.springframework.security.core.userdetails.User
                 .withUsername(user.getEmail())
                 .password(user.getPassword())
-                .authorities("USER") // Add roles if needed
+                .authorities(authority)
                 .build();
     }
 }

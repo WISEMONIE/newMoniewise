@@ -31,3 +31,18 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Firebase
+src/main/resources/serviceAccountKey.json
+
+# Spring secrets
+src/main/resources/application.properties
+
+src/main/resources/.env
+# Local scratch — never commit (root-level DB dumps, JVM crash logs, compiled scratch).
+# NB: /*.sql is root-scoped so Flyway migrations under src/ stay tracked.
+/*.sql
+/*.dump
+/backups/
+hs_err_pid*.log
+*.class

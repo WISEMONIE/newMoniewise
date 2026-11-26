@@ -1,10 +1,10 @@
 package com.moniewise.moniewise_backend.config;
 
-import javax.persistence.AttributeConverter;
-import javax.persistence.Converter;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import javax.persistence.AttributeConverter;
+import javax.persistence.Converter;
 
 import java.util.Map;
 

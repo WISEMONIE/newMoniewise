@@ -1,7 +1,11 @@
 package com.moniewise.moniewise_backend.security;
 
+import com.moniewise.moniewise_backend.entity.User; // Import your User entity
+import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.UserService;
 import io.jsonwebtoken.ExpiredJwtException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -18,17 +22,31 @@ import java.io.IOException;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
     private final JwtUtil jwtUtil;
     private final UserService userService;
+    private final AuthSessionService authSessionService;
+    private final AuthenticatedUserHolder userHolder;
 
-    public JwtAuthenticationFilter(JwtUtil jwtUtil, UserService userService) {
+    public JwtAuthenticationFilter(JwtUtil jwtUtil,
+                                   UserService userService,
+                                   AuthSessionService authSessionService,
+                                   AuthenticatedUserHolder userHolder) {
         this.jwtUtil = jwtUtil;
         this.userService = userService;
+        this.authSessionService = authSessionService;
+        this.userHolder = userHolder;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
+        return false;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
+
         String header = request.getHeader("Authorization");
         String token = null;
         String email = null;
@@ -38,74 +56,43 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             try {
                 email = jwtUtil.extractEmail(token);
             } catch (ExpiredJwtException e) {
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.getWriter().write("{\"message\": \"Token expired\", \"status\": 401}");
-                response.setContentType("application/json");
-                return;
+                log.warn("JWT expired for request: {}", request.getRequestURI());
             } catch (Exception e) {
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.getWriter().write("{\"message\": \"Invalid token\", \"status\": 401}");
-                response.setContentType("application/json");
-                return;
+                log.warn("Invalid JWT: {}", e.getMessage());
             }
         }
 
         if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = userService.loadUserByUsername(email); // Now works!
-            if (jwtUtil.validateToken(token, userDetails)) {
+            // 1. Single DB call: findByEmail checks isDeleted() and returns the full entity.
+            //    buildUserDetails converts it to Spring's UserDetails in-memory — no second query.
+            User user = userService.findByEmail(email);
+            UserDetails userDetails = userService.buildUserDetails(user);
+
+            // Store the entity in the request-scoped holder so controllers can
+            // access the User object without issuing another DB query.
+            userHolder.setUser(user);
+
+            // 2. Extract Session ID from the incoming Token
+            String tokenSessionId = jwtUtil.extractSessionId(token);
+
+            boolean isSessionValid = tokenSessionId != null &&
+                    authSessionService.isSessionActive(email, tokenSessionId);
+
+            if (jwtUtil.validateToken(token, userDetails) && isSessionValid) {
+                String scope = jwtUtil.extractScope(token);
+                if (scope != null) {
+                    request.setAttribute("jwt.scope", scope);
+                }
                 UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                         userDetails, null, userDetails.getAuthorities());
                 auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(auth);
+                log.debug("Set authentication for: {}", email);
+            } else if (!isSessionValid) {
+                log.warn("Session Mismatch: User {} tried to use an old token/device.", email);
             }
         }
+
         chain.doFilter(request, response);
     }
-
-//    @Override
-//    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
-//            throws ServletException, IOException {
-//        String requestPath = request.getRequestURI();
-//        System.out.println("Processing request: " + requestPath);
-//
-//        String authHeader = request.getHeader("Authorization");
-//        System.out.println("Authorization Header: " + authHeader);
-//
-//        String jwt = null;
-//        String username = null;
-//
-//        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-//            jwt = authHeader.substring(7);
-//            System.out.println("JWT Token: " + jwt);
-//            try {
-//                username = jwtUtil.extractEmail(jwt);
-//                System.out.println("Extracted username: " + username);
-//            } catch (Exception e) {
-//                System.out.println("Failed to extract username from token: " + e.getMessage());
-//            }
-//        } else {
-//            System.out.println("No Bearer token found in Authorization header");
-//        }
-//
-//        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-//            UserDetails userDetails = userService.loadUserByUsername(username);
-//            System.out.println("Loaded user details for: " + username);
-//            if (jwtUtil.validateToken(jwt, userDetails)) {
-//                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-//                        userDetails, null, userDetails.getAuthorities());
-//                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-//                SecurityContextHolder.getContext().setAuthentication(authToken);
-//                System.out.println("Authentication successful for user: " + username);
-//            } else {
-//                System.out.println("Token validation failed for user: " + username);
-//            }
-//        } else if (username == null) {
-//            System.out.println("No username extracted from token");
-//        } else {
-//            System.out.println("Authentication already set or username is null");
-//        }
-//
-//        chain.doFilter(request, response);
-//    }
-
 }
