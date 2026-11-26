@@ -20,6 +20,9 @@ public class AdminNotificationController {
 
     private final AdminBroadcastService adminBroadcastService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.moniewise.moniewise_backend.service.BlogService blogService;
+
     public AdminNotificationController(AdminBroadcastService adminBroadcastService) {
         this.adminBroadcastService = adminBroadcastService;
     }
@@ -52,6 +55,26 @@ public class AdminNotificationController {
                 request,
                 adminEmail(authentication)
         ));
+    }
+
+    /** Upload a push picture (JPG or PNG, up to 1 MB). Returns its public link. */
+    @PostMapping(value = "/image", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<java.util.Map<String, Object>> uploadImage(
+            @org.springframework.web.bind.annotation.RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
+        return ResponseEntity.ok(blogService.uploadPushImage(file));
+    }
+
+    /** How many people "all users" reaches, and how many of them can get a push. */
+    @org.springframework.web.bind.annotation.GetMapping("/audience")
+    public java.util.Map<String, Object> audience(
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "false") boolean includeTestAccounts) {
+        return adminBroadcastService.audienceSize(includeTestAccounts);
+    }
+
+    /** The last 100 broadcasts, newest first. */
+    @org.springframework.web.bind.annotation.GetMapping("/history")
+    public java.util.List<com.moniewise.moniewise_backend.entity.AdminBroadcast> history() {
+        return adminBroadcastService.history();
     }
 
     private String adminEmail(Authentication authentication) {

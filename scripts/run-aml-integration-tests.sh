@@ -46,4 +46,4 @@ export TWILIO_ACCOUNT_SID=ACx TWILIO_AUTH_TOKEN=x TWILIO_PHONE_NUMBER=+100000000
 export RUBIES_API_KEY=not-a-real-key RUBIES_BASE_URL=http://localhost:9
 
 cd "$(dirname "$0")/.."
-./mvnw -q -o test -Dtest=AmlIntegrationTest "$@"
+./mvnw -q -o test -Dtest=AmlIntegrationTest,AdminPushIntegrationTest,AdminBroadcastJobIntegrationTest "$@"

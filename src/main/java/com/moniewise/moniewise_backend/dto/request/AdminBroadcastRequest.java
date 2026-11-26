@@ -34,6 +34,15 @@ public class AdminBroadcastRequest {
     @Size(max = 500, message = "Footer note must be 500 characters or fewer")
     private String footerNote;
 
+    /** Optional picture for the push: a public https link, usually from POST /admin/notifications/image. */
+    @Size(max = 1000, message = "Image link must be 1000 characters or fewer")
+    private String imageUrl;
+
+    /** One per compose on the website. A repeat with the same key is not sent again. */
+    @Size(max = 64, message = "Request key must be 64 characters or fewer")
+    @javax.validation.constraints.Pattern(regexp = "^[A-Za-z0-9-]*$", message = "Request key has invalid characters")
+    private String requestKey;
+
     private Boolean sendFcm;
     private Boolean sendEmail;
     private Boolean allUsers;

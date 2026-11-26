@@ -52,6 +52,10 @@ public class Notification {
     @Column(name = "redirect_url")
     private String redirectUrl; // e.g., "/budgets/60/envelopes/543", "/disbursements/34164"
 
+    /** Optional picture sent with an admin push (https). */
+    @Column(name = "image_url", length = 1000)
+    private String imageUrl;
+
     /**
      * True once Firebase accepts a push for at least one active FCM token.
      * False means the notification was saved to the inbox but no push went out,
