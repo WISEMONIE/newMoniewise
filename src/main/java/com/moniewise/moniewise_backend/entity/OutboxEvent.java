@@ -66,6 +66,13 @@ public class OutboxEvent {
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    public static final short PRIORITY_PERSONAL = 0;
+    public static final short PRIORITY_BULK = 1;
+
+    /** Bulk pushes (admin broadcasts) are delivered after personal alerts. */
+    @Column(name = "priority", nullable = false)
+    private short priority = PRIORITY_PERSONAL;
+
     /**
      * How long (seconds) this event remains relevant after it was created.
      * The outbox worker will skip (mark STALE) any event where

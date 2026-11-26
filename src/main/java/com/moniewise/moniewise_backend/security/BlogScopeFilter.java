@@ -41,6 +41,7 @@ public class BlogScopeFilter extends OncePerRequestFilter {
     static boolean siteAdminPath(String path) {
         return path.startsWith("/admin/blog/") || path.equals("/admin/blog")
                 || path.startsWith("/admin/aml/") || path.equals("/admin/aml")
+                || path.startsWith("/admin/notifications/") || path.equals("/admin/notifications")
                 || path.equals("/site-admin/auth/logout");
     }
 }

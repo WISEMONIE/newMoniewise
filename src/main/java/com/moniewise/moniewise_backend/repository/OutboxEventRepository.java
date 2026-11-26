@@ -30,7 +30,8 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
                 created_at,
                 ttl_seconds,
                 inbox_saved,
-                delivered_tokens
+                delivered_tokens,
+                priority
             FROM outbox_events
             WHERE (
                 (
@@ -44,7 +45,7 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
                 )
             )
             AND retry_count < 5
-            ORDER BY COALESCE(next_attempt_at, created_at) ASC, created_at ASC
+            ORDER BY priority ASC, COALESCE(next_attempt_at, created_at) ASC, created_at ASC
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)

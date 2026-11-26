@@ -197,6 +197,53 @@ public class BlogService {
         logger.info("[Blog] Deleted media id={}", mediaId);
     }
 
+    /** Push pictures: JPG or PNG up to 1 MB, which Android and iOS both show reliably. */
+    public static final long MAX_PUSH_IMAGE_SIZE = 1024L * 1024L;
+
+    public Map<String, Object> uploadPushImage(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Choose an image to upload");
+        }
+        String contentType = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
+        if (!contentType.equals("image/jpeg") && !contentType.equals("image/png")) {
+            throw new IllegalArgumentException("Push images must be JPG or PNG");
+        }
+        if (file.getSize() > MAX_PUSH_IMAGE_SIZE) {
+            throw new IllegalArgumentException("Push images must be 1 MB or smaller");
+        }
+        // The browser's stated type can be anything; check the file itself.
+        String actualType = imageTypeFromBytes(file);
+        if (!contentType.equals(actualType)) {
+            throw new IllegalArgumentException("Push images must be JPG or PNG");
+        }
+        String blobName = buildStandaloneBlobName(file).replaceFirst("^blog/images/", "push/images/");
+        String url = uploadBlobToFirebase(file, blobName);
+        return Map.of(
+                "url", url,
+                "contentType", contentType,
+                "fileSize", file.getSize()
+        );
+    }
+
+    /** "image/png" or "image/jpeg" from the file's first bytes, or null. */
+    static String imageTypeFromBytes(MultipartFile file) {
+        byte[] head = new byte[8];
+        int read;
+        try (java.io.InputStream in = file.getInputStream()) {
+            read = in.readNBytes(head, 0, head.length);
+        } catch (java.io.IOException e) {
+            return null;
+        }
+        if (read >= 8 && (head[0] & 0xFF) == 0x89 && head[1] == 'P' && head[2] == 'N' && head[3] == 'G'
+                && head[4] == 0x0D && head[5] == 0x0A && head[6] == 0x1A && head[7] == 0x0A) {
+            return "image/png";
+        }
+        if (read >= 3 && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8 && (head[2] & 0xFF) == 0xFF) {
+            return "image/jpeg";
+        }
+        return null;
+    }
+
     public Map<String, Object> uploadStandaloneFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("File is required");

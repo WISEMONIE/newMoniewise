@@ -1,15 +1,14 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.dto.request.AdminBroadcastRequest;
+import com.moniewise.moniewise_backend.entity.AdminBroadcast;
 import com.moniewise.moniewise_backend.dto.response.AdminBroadcastResponse;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Slice;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -19,13 +18,16 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.Set;
 
 @Service
 public class AdminBroadcastService {
 
     private static final Logger logger = LoggerFactory.getLogger(AdminBroadcastService.class);
-    private static final int PAGE_SIZE = 500;
+    /** Up to this many people are sent to inside the request; more become a background job. */
+    static final int INLINE_LIMIT = 50;
     private static final long MAX_TTL_SECONDS = 604_800L;
 
     private final UserRepository userRepository;
@@ -91,6 +93,9 @@ public class AdminBroadcastService {
         String footerNote = firstNonBlank(request.getFooterNote(), defaultFooterNote(type));
         String ctaLabel = firstNonBlank(request.getCtaLabel(), "Open Wisemonie");
         String ctaUrl = blankToNull(request.getCtaUrl());
+        if (ctaUrl != null && !isAllowedLink(ctaUrl)) {
+            throw new IllegalArgumentException("The button link must start with https://");
+        }
         String pushActionType = isExternalUrl(ctaUrl) ? "OPEN_EXTERNAL_URL" : null;
         boolean sendFcm = request.getSendFcm() == null || request.getSendFcm();
         boolean sendEmail = request.getSendEmail() == null || request.getSendEmail();
@@ -99,6 +104,10 @@ public class AdminBroadcastService {
                 ? request.getDeliverFcmNow()
                 : defaultDeliverNow;
         long ttlSeconds = resolveTtlSeconds(request.getTtlSeconds(), type);
+        String imageUrl = blankToNull(request.getImageUrl());
+        if (imageUrl != null && !imageUrl.toLowerCase(Locale.ROOT).startsWith("https://")) {
+            throw new IllegalArgumentException("The image must be a public https link");
+        }
 
         if (!sendFcm && !sendEmail) {
             throw new IllegalArgumentException("At least one of sendFcm or sendEmail must be true");
@@ -107,54 +116,38 @@ public class AdminBroadcastService {
         boolean hasTargets = hasValues(request.getUserIds()) || hasValues(request.getEmails());
         boolean allUsers = request.getAllUsers() == null ? !hasTargets : request.getAllUsers();
 
+        if (!allUsers && !hasTargets) {
+            throw new IllegalArgumentException("Provide allUsers=true, userIds, or emails");
+        }
+        String requestKey = blankToNull(request.getRequestKey());
+        if (requestKey != null) {
+            Optional<AdminBroadcast> earlier = broadcastHistory.findByRequestKey(requestKey);
+            if (earlier.isPresent()) {
+                return alreadySent(earlier.get());
+            }
+        }
+        AdminBroadcast row = newHistory(type, title, message, imageUrl, ctaLabel, ctaUrl, sendFcm,
+                sendEmail, includeTestAccounts, allUsers, request, adminEmail);
+        row.setRequestKey(requestKey);
+
         if (allUsers) {
-            emailDispatcher.executeBroadcastAsync(
-                    type, title, message, emailSubject, emailBody, tag,
-                    footerNote, ctaLabel, ctaUrl, pushActionType,
-                    sendFcm, sendEmail, includeTestAccounts, deliverNow,
-                    ttlSeconds, adminEmail, null, null
-            );
-
-            logger.info("[ADMIN-BROADCAST] admin={} type={} allUsers=true — dispatched to background",
-                    adminEmail, type);
-
-            return new AdminBroadcastResponse(
-                    true,
-                    type.name(),
-                    -1,
-                    0,
-                    0,
-                    0,
-                    deliverNow,
-                    List.of(),
-                    type.name() + " broadcast accepted — delivering in background via "
-                            + (sendFcm && sendEmail ? "FCM and email" : sendFcm ? "FCM" : "email") + "."
-            );
+            return startJob(row, null, emailSubject, emailBody, tag, footerNote, ttlSeconds, List.of());
         }
 
         RecipientSelection selection = resolveRecipients(request, includeTestAccounts);
         List<User> recipients = selection.users();
 
-        if (recipients.size() > 50) {
-            List<Long> recipientIds = recipients.stream().map(User::getId).toList();
-            emailDispatcher.executeBroadcastAsync(
-                    type, title, message, emailSubject, emailBody, tag,
-                    footerNote, ctaLabel, ctaUrl, pushActionType,
-                    sendFcm, sendEmail, includeTestAccounts, deliverNow,
-                    ttlSeconds, adminEmail, recipientIds, null
-            );
+        if (recipients.size() > INLINE_LIMIT) {
+            List<Long> recipientIds = recipients.stream().map(User::getId).sorted().toList();
+            return startJob(row, recipientIds, emailSubject, emailBody, tag, footerNote, ttlSeconds,
+                    selection.skippedTargets());
+        }
 
-            return new AdminBroadcastResponse(
-                    true,
-                    type.name(),
-                    recipients.size(),
-                    0,
-                    0,
-                    0,
-                    deliverNow,
-                    selection.skippedTargets(),
-                    type.name() + " broadcast accepted for " + recipients.size() + " recipients — delivering in background."
-            );
+        AdminBroadcast history;
+        try {
+            history = broadcastHistory.saveAndFlush(row);
+        } catch (DataIntegrityViolationException e) {
+            return alreadySentAfterRace(requestKey, e);
         }
 
         List<AdminBroadcastEmailDispatcher.Recipient> emailRecipients = new ArrayList<>();
@@ -181,7 +174,8 @@ public class AdminBroadcastService {
                         message,
                         pushActionType,
                         ctaUrl,
-                        ttlSeconds
+                        ttlSeconds,
+                        imageUrl
                 );
                 fcmQueued++;
                 if (deliverNow && eventId != null) {
@@ -210,6 +204,7 @@ public class AdminBroadcastService {
 
         logger.info("[ADMIN-BROADCAST] admin={} type={} recipients={} fcmQueued={} fcmDeliveryAttempts={} emailsQueued={}",
                 adminEmail, type, recipients.size(), fcmQueued, fcmDeliveryAttempts, emailRecipients.size());
+        emailDispatcher.recordFinish(history.getId(), recipients.size(), fcmQueued, emailRecipients.size());
 
         return new AdminBroadcastResponse(
                 true,
@@ -220,24 +215,126 @@ public class AdminBroadcastService {
                 emailRecipients.size(),
                 deliverNow,
                 selection.skippedTargets(),
-                buildResponseMessage(type, sendFcm, sendEmail, deliverNow)
+                buildResponseMessage(type, sendFcm, sendEmail, deliverNow),
+                false
         );
     }
 
-    private RecipientSelection resolveRecipients(AdminBroadcastRequest request, boolean includeTestAccounts) {
-        boolean hasTargets = hasValues(request.getUserIds()) || hasValues(request.getEmails());
-        boolean allUsers = request.getAllUsers() == null
-                ? !hasTargets
-                : request.getAllUsers();
+    /**
+     * Saves the send as a job and starts it in the background. Its pushes are
+     * only queued, so they go out behind personal alerts. If the server
+     * restarts, {@link AdminBroadcastResumer} carries on from where it stopped.
+     */
+    private AdminBroadcastResponse startJob(AdminBroadcast row, List<Long> recipientIds,
+                                            String emailSubject, String emailBody, String tag,
+                                            String footerNote, long ttlSeconds, List<String> skippedTargets) {
+        row.setBackground(true);
+        row.setAllUsers(recipientIds == null);
+        row.setRecipientIds(recipientIds == null ? null
+                : recipientIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")));
+        row.setEmailSubject(emailSubject);
+        row.setEmailBody(emailBody);
+        row.setTag(tag);
+        row.setFooterNote(footerNote);
+        row.setTtlSeconds(ttlSeconds);
+        row.setRunnerToken(UUID.randomUUID().toString());
+        AdminBroadcast saved;
+        try {
+            saved = broadcastHistory.saveAndFlush(row);
+        } catch (DataIntegrityViolationException e) {
+            return alreadySentAfterRace(row.getRequestKey(), e);
+        }
+        emailDispatcher.runJobAsync(saved.getId(), saved.getRunnerToken());
+        logger.info("[ADMIN-BROADCAST] admin={} type={} broadcast={} started in the background ({})",
+                saved.getSentBy(), saved.getType(), saved.getId(), saved.getAudience());
+        return new AdminBroadcastResponse(
+                true,
+                saved.getType(),
+                recipientIds == null ? -1 : recipientIds.size(),
+                0,
+                0,
+                0,
+                false,
+                skippedTargets,
+                "Sending in the background. Progress shows in the history.",
+                false
+        );
+    }
 
+    private AdminBroadcastResponse alreadySent(AdminBroadcast earlier) {
+        return new AdminBroadcastResponse(
+                true,
+                earlier.getType(),
+                earlier.getRecipients(),
+                earlier.getPushQueued(),
+                0,
+                earlier.getEmailsQueued(),
+                false,
+                List.of(),
+                "Already sent. It was not sent again.",
+                true
+        );
+    }
+
+    /** Two identical requests arrived together; the other one won. */
+    private AdminBroadcastResponse alreadySentAfterRace(String requestKey, DataIntegrityViolationException e) {
+        if (requestKey == null) {
+            throw e;
+        }
+        return broadcastHistory.findByRequestKey(requestKey).map(this::alreadySent).orElseThrow(() -> e);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.moniewise.moniewise_backend.repository.AdminBroadcastRepository broadcastHistory;
+
+    /** Saved before sending, so even a send that fails part-way shows in the history. */
+    private AdminBroadcast newHistory(NotificationType type, String title, String message, String imageUrl,
+                                      String ctaLabel, String ctaUrl, boolean sendPush, boolean sendEmail,
+                                      boolean includeTestAccounts, boolean allUsers,
+                                      AdminBroadcastRequest request, String adminEmail) {
+        AdminBroadcast row = new AdminBroadcast();
+        row.setType(type.name());
+        row.setTitle(title);
+        row.setMessage(message);
+        row.setImageUrl(imageUrl);
+        row.setCtaLabel(ctaUrl == null ? null : ctaLabel);
+        row.setCtaUrl(ctaUrl);
+        row.setSendPush(sendPush);
+        row.setSendEmail(sendEmail);
+        row.setIncludeTestAccounts(includeTestAccounts);
+        row.setAudience(describeAudience(allUsers, request, adminEmail));
+        row.setStatus(AdminBroadcast.Status.SENDING);
+        row.setSentBy(adminEmail == null ? "unknown-admin" : adminEmail);
+        row.setCreatedAt(java.time.LocalDateTime.now());
+        row.setUpdatedAt(row.getCreatedAt());
+        return row;
+    }
+
+    private static String describeAudience(boolean allUsers, AdminBroadcastRequest request, String adminEmail) {
         if (allUsers) {
-            return new RecipientSelection(loadAllRecipients(includeTestAccounts), List.of());
+            return "All users";
         }
-
-        if (!hasTargets) {
-            throw new IllegalArgumentException("Provide allUsers=true, userIds, or emails");
+        List<String> emails = request.getEmails() == null ? List.of() : request.getEmails();
+        int ids = request.getUserIds() == null ? 0 : request.getUserIds().size();
+        if (ids == 0 && emails.size() == 1 && adminEmail != null && emails.get(0).equalsIgnoreCase(adminEmail)) {
+            return "Test to " + adminEmail;
         }
+        int total = ids + emails.size();
+        return total + (total == 1 ? " chosen user" : " chosen users");
+    }
 
+    /** For the "send to N people?" confirmation. */
+    public java.util.Map<String, Object> audienceSize(boolean includeTestAccounts) {
+        return java.util.Map.of(
+                "allUsers", userRepository.countBroadcastRecipients(includeTestAccounts),
+                "reachableByPush", userRepository.countBroadcastPushReachable(includeTestAccounts));
+    }
+
+    public List<AdminBroadcast> history() {
+        return broadcastHistory.findTop100ByOrderByCreatedAtDesc();
+    }
+
+    private RecipientSelection resolveRecipients(AdminBroadcastRequest request, boolean includeTestAccounts) {
         Map<Long, User> recipientsById = new LinkedHashMap<>();
         List<String> skippedTargets = new ArrayList<>();
 
@@ -276,18 +373,6 @@ public class AdminBroadcastService {
         }
 
         return new RecipientSelection(new ArrayList<>(recipientsById.values()), skippedTargets);
-    }
-
-    private List<User> loadAllRecipients(boolean includeTestAccounts) {
-        List<User> users = new ArrayList<>();
-        Pageable pageable = PageRequest.of(0, PAGE_SIZE);
-        Slice<User> slice;
-        do {
-            slice = userRepository.findBroadcastRecipients(includeTestAccounts, pageable);
-            users.addAll(slice.getContent());
-            pageable = slice.nextPageable();
-        } while (slice.hasNext());
-        return users;
     }
 
     private long resolveTtlSeconds(Long requestedTtlSeconds, NotificationType type) {
@@ -375,6 +460,15 @@ public class AdminBroadcastService {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    /** An https link, or a path inside the app such as /budgets. */
+    static boolean isAllowedLink(String value) {
+        String lower = value.trim().toLowerCase(Locale.ROOT);
+        if (lower.startsWith("https://")) {
+            return lower.length() > "https://".length();
+        }
+        return lower.startsWith("/") && !lower.startsWith("//") && !lower.contains("\\");
     }
 
     private boolean isExternalUrl(String value) {

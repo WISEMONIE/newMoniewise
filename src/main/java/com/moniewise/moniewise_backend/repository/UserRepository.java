@@ -653,6 +653,34 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
     Slice<User> findBroadcastRecipients(@Param("includeTestAccounts") boolean includeTestAccounts,
                                         Pageable pageable);
 
+    /** Everyone after a given user id, in id order, so a broadcast can carry on after a restart. */
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+              AND u.id > :afterId
+            ORDER BY u.id ASC
+            """)
+    List<User> findBroadcastRecipientsAfter(@Param("includeTestAccounts") boolean includeTestAccounts,
+                                            @Param("afterId") long afterId,
+                                            Pageable pageable);
+
+    /** Chosen users after a given user id, in id order. */
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+              AND u.id IN :ids
+              AND u.id > :afterId
+            ORDER BY u.id ASC
+            """)
+    List<User> findBroadcastRecipientsByIdsAfter(@Param("ids") Collection<Long> ids,
+                                                 @Param("includeTestAccounts") boolean includeTestAccounts,
+                                                 @Param("afterId") long afterId,
+                                                 Pageable pageable);
+
     @Query("""
             SELECT u
             FROM User u
@@ -663,6 +691,27 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             """)
     List<User> findBroadcastRecipientsByIds(@Param("ids") Collection<Long> ids,
                                             @Param("includeTestAccounts") boolean includeTestAccounts);
+
+    /** Everyone an "all users" broadcast would reach. */
+    @Query("""
+            SELECT COUNT(u)
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+            """)
+    long countBroadcastRecipients(@Param("includeTestAccounts") boolean includeTestAccounts);
+
+    /** Of those, how many have a phone signed in that can receive a push. */
+    @Query(value = """
+            SELECT COUNT(DISTINCT u.id)
+            FROM users u
+            JOIN auth_sessions s ON s.user_id = u.id
+            WHERE u.is_deleted = false
+              AND (:includeTestAccounts = true OR u.test_account = false)
+              AND s.revoked = false
+              AND s.fcm_token IS NOT NULL AND s.fcm_token <> ''
+            """, nativeQuery = true)
+    long countBroadcastPushReachable(@Param("includeTestAccounts") boolean includeTestAccounts);
 
     @Query("""
             SELECT u

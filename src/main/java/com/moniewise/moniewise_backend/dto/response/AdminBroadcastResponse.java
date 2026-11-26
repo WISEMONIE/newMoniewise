@@ -11,6 +11,8 @@ public record AdminBroadcastResponse(
         int emailsQueued,
         boolean deliverFcmNow,
         List<String> skippedTargets,
-        String message
+        String message,
+        /** True when this exact send (same request key) was already made, so nothing new went out. */
+        boolean alreadySent
 ) {
 }

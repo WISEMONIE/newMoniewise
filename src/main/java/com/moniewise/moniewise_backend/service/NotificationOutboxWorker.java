@@ -38,6 +38,15 @@ public class NotificationOutboxWorker {
     @Value("${moniewise.outbox.worker.batch-size:50}")
     private int batchSize;
 
+    /**
+     * While batches come back full, keep going instead of waiting for the next
+     * tick, for up to this long (the scheduler has only a couple of threads,
+     * so this stays short). Each batch is claimed afresh, so a personal
+     * alert that arrives during a big broadcast still goes out next.
+     */
+    @Value("${moniewise.outbox.worker.drain-ms:20000}")
+    private long drainMs;
+
     private final OutboxEventRepository outboxEventRepository;
     private final NotificationService notificationService;
 
@@ -56,6 +65,16 @@ public class NotificationOutboxWorker {
 
     @Scheduled(fixedDelayString = "${moniewise.outbox.worker.fixed-delay-ms:5000}")
     public void processOutboxEvents() {
+        long stopAt = System.currentTimeMillis() + Math.max(0, drainMs);
+        int limit = Math.max(1, Math.min(batchSize, 200));
+        int delivered;
+        do {
+            delivered = processOneBatch();
+        } while (delivered >= limit && System.currentTimeMillis() < stopAt);
+    }
+
+    /** Claims and delivers one batch. Returns how many events it claimed. */
+    int processOneBatch() {
         List<Long> ids;
         try {
             ids = self.claimBatch();
@@ -63,14 +82,14 @@ public class NotificationOutboxWorker {
             if (ExceptionClassifier.isTransientConnectionError(e)) {
                 logger.warn("[OUTBOX] Transient DB connection error; skipping this delivery tick: {}",
                         ExceptionClassifier.rootCauseMessage(e));
-                return;
+                return 0;
             }
             logger.error("[OUTBOX] Failed to claim a batch of events", e);
-            return;
+            return 0;
         }
 
         if (ids.isEmpty()) {
-            return;
+            return 0;
         }
 
         logger.info("[OUTBOX] Claimed {} event(s) for delivery", ids.size());
@@ -84,6 +103,7 @@ public class NotificationOutboxWorker {
                 logger.error("[OUTBOX] Unexpected failure delivering event {}", id, e);
             }
         }
+        return ids.size();
     }
 
     /**
