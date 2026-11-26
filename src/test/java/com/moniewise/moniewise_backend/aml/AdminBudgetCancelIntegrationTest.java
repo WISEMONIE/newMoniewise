@@ -282,4 +282,76 @@ class AdminBudgetCancelIntegrationTest {
                         .with(user("someone@example.test").roles("USER")))
                 .andExpect(status().isForbidden());
     }
+    // ── The older DELETE /budgets/{id} goes through the same steps ────────
+
+    private org.springframework.test.web.servlet.ResultActions oldDelete(long budgetId, String json) throws Exception {
+        var req = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .delete("/budgets/" + budgetId).with(user(ADMIN).roles("ADMIN"));
+        if (json != null) {
+            req = req.contentType(MediaType.APPLICATION_JSON).content(json);
+        }
+        return mvc.perform(req);
+    }
+
+    @Test
+    void theOldDeleteRefusesWithoutACode() throws Exception {
+        Fixture f = customerWithActiveBudget();
+        oldDelete(f.budget().getId(), null).andExpect(status().isPreconditionRequired());
+        oldDelete(f.budget().getId(), "{\"reason\":\"Customer asked to stop this budget\"}")
+                .andExpect(status().isPreconditionRequired());
+        assertEquals(BudgetStatus.ACTIVE, statusOf(f.budget()));
+    }
+
+    @Test
+    void theOldDeleteWorksWithACodeAndIsRecorded() throws Exception {
+        Fixture f = customerWithActiveBudget();
+        long id = f.budget().getId();
+        mvc.perform(post("/budgets/" + id + "/delete-code").with(user(ADMIN).roles("ADMIN")))
+                .andExpect(status().isOk());
+        String code = codeEmailedFor(id);
+
+        oldDelete(id, new ObjectMapper().writeValueAsString(Map.of("code", code, "reason", "Support ticket 1182")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refunded").value(5000));
+
+        assertEquals(BudgetStatus.CANCELLED, statusOf(f.budget()));
+        assertEquals("Support ticket 1182", jdbc.queryForObject(
+                "SELECT reason FROM admin_budget_cancellations WHERE budget_id = ?", String.class, id));
+    }
+
+    @Test
+    void theOldDeleteStillRefusesWhileMoneyIsMoving() throws Exception {
+        Fixture f = customerWithActiveBudget();
+        jdbc.update("UPDATE envelopes SET held_amount = 300 WHERE id = ?", f.envelope().getId());
+        mvc.perform(post("/budgets/" + f.budget().getId() + "/delete-code").with(user(ADMIN).roles("ADMIN")))
+                .andExpect(status().isConflict());
+        assertEquals(BudgetStatus.ACTIVE, statusOf(f.budget()));
+    }
+
+    @Test
+    void theOldDeleteCanStillDissolveADraftButTheWebsiteCannot() throws Exception {
+        Fixture f = customerWithActiveBudget();
+        long id = f.budget().getId();
+        jdbc.update("UPDATE budgets SET status = 'DRAFT' WHERE id = ?", id);
+
+        requestCode(id).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("This budget is draft, not active, so there is nothing to cancel."));
+
+        mvc.perform(post("/budgets/" + id + "/delete-code").with(user(ADMIN).roles("ADMIN")))
+                .andExpect(status().isOk());
+        oldDelete(id, new ObjectMapper().writeValueAsString(Map.of("code", codeEmailedFor(id), "reason", "Abandoned draft")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refunded").value(0));
+        assertEquals(BudgetStatus.CANCELLED, statusOf(f.budget()));
+    }
+
+    @Test
+    void customersCannotUseTheOldDelete() throws Exception {
+        Fixture f = customerWithActiveBudget();
+        mvc.perform(post("/budgets/" + f.budget().getId() + "/delete-code").with(user("someone@example.test").roles("USER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/budgets/" + f.budget().getId())
+                        .with(user("someone@example.test").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
 }

@@ -88,6 +88,19 @@ public class AdminBudgetService {
     public record Result(Long budgetId, String budgetName, BigDecimal refunded, String customerEmail) {
     }
 
+    /**
+     * Which budgets a caller may cancel. The website admin cancels ACTIVE
+     * budgets only. The older DELETE /budgets/{id} also dissolves scheduled,
+     * draft and completed ones, as it always has.
+     */
+    public enum Scope {
+        ACTIVE_ONLY, ANY_NOT_CANCELLED;
+
+        boolean allows(BudgetStatus status) {
+            return this == ACTIVE_ONLY ? status == BudgetStatus.ACTIVE : status != BudgetStatus.CANCELLED;
+        }
+    }
+
     /** Thrown when the budget cannot be cancelled now. The message is safe to show. */
     public static class NotCancellableException extends RuntimeException {
         public NotCancellableException(String message) {
@@ -119,7 +132,12 @@ public class AdminBudgetService {
      */
     @Transactional(readOnly = true)
     public String describeForApproval(Long budgetId) {
-        Budget budget = activeBudget(budgetId);
+        return describeForApproval(budgetId, Scope.ACTIVE_ONLY);
+    }
+
+    @Transactional(readOnly = true)
+    public String describeForApproval(Long budgetId, Scope scope) {
+        Budget budget = cancellableBudget(budgetId, scope);
         List<String> blockers = blockers(budgetId);
         if (!blockers.isEmpty()) {
             throw new NotCancellableException(String.join(" ", blockers));
@@ -135,6 +153,11 @@ public class AdminBudgetService {
      */
     @Transactional
     public Result cancel(Long budgetId, String adminEmail, String rawReason) {
+        return cancel(budgetId, adminEmail, rawReason, Scope.ACTIVE_ONLY);
+    }
+
+    @Transactional
+    public Result cancel(Long budgetId, String adminEmail, String rawReason, Scope scope) {
         String reason = rawReason == null ? "" : rawReason.trim();
         if (reason.length() < 5) {
             throw new IllegalArgumentException("Give a short reason (at least 5 characters).");
@@ -144,10 +167,7 @@ public class AdminBudgetService {
         }
         Budget budget = budgetRepository.findByIdForUpdate(budgetId)
                 .orElseThrow(() -> new NotCancellableException("That budget no longer exists."));
-        if (budget.getStatus() != BudgetStatus.ACTIVE) {
-            throw new NotCancellableException("This budget is " + budget.getStatus().name().toLowerCase(Locale.ROOT)
-                    + ", not active, so there is nothing to cancel.");
-        }
+        requireAllowed(budget, scope);
         List<String> blockers = blockers(budgetId);
         if (!blockers.isEmpty()) {
             throw new NotCancellableException(String.join(" ", blockers));
@@ -204,14 +224,21 @@ public class AdminBudgetService {
         return reasons;
     }
 
-    private Budget activeBudget(Long budgetId) {
+    private Budget cancellableBudget(Long budgetId, Scope scope) {
         Budget budget = budgetRepository.findById(budgetId)
                 .orElseThrow(() -> new NotCancellableException("That budget no longer exists."));
-        if (budget.getStatus() != BudgetStatus.ACTIVE) {
-            throw new NotCancellableException("This budget is " + budget.getStatus().name().toLowerCase(Locale.ROOT)
-                    + ", not active, so there is nothing to cancel.");
-        }
+        requireAllowed(budget, scope);
         return budget;
+    }
+
+    private static void requireAllowed(Budget budget, Scope scope) {
+        if (scope.allows(budget.getStatus())) {
+            return;
+        }
+        String status = budget.getStatus().name().toLowerCase(Locale.ROOT);
+        throw new NotCancellableException(scope == Scope.ACTIVE_ONLY
+                ? "This budget is " + status + ", not active, so there is nothing to cancel."
+                : "This budget is already cancelled.");
     }
 
     private CustomerRef customer(String rawEmail) {

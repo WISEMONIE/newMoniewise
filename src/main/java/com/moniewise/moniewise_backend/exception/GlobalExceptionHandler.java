@@ -99,6 +99,20 @@ public class GlobalExceptionHandler {
                 ));
     }
 
+    /**
+     * A signed-in user without the right role (for example a customer calling
+     * an admin-only endpoint). Without this the catch-all below turned it into
+     * a 500.
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleAccessDenied(
+            org.springframework.security.access.AccessDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                "status", HttpStatus.FORBIDDEN.value(),
+                "error", "You are not allowed to do this."
+        ));
+    }
+
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<ApiErrorResponse> handleSecurity(SecurityException ex, WebRequest request) {
         ApiErrorResponse response = new ApiErrorResponse(HttpStatus.FORBIDDEN.value(), HttpStatus.FORBIDDEN.getReasonPhrase(), "You are not allowed to perform this action.", request.getDescription(false).replace("uri=", ""), LocalDateTime.now());
