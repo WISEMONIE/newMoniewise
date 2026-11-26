@@ -1206,8 +1206,9 @@ public class BudgetService {
     }
 
     // New: Delete a Budget
+    /** Returns how much went back to the wallet (zero if nothing was funded). */
     @Transactional
-    public void deleteBudget(Long budgetId, String email) {
+    public BigDecimal deleteBudget(Long budgetId, String email) {
         User user = userService.findByEmail(email);
         Budget budget = budgetRepository.findByIdForUpdate(budgetId)
                 .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
@@ -1215,15 +1216,16 @@ public class BudgetService {
             throw new SecurityException("You do not have permission to delete this budget");
         }
         if (budget.getStatus() == BudgetStatus.CANCELLED) {
-            return; // already dissolved — idempotent, nothing to do
+            return BigDecimal.ZERO; // already dissolved — idempotent, nothing to do
         }
+        BigDecimal refunded = BigDecimal.ZERO;
         // Creating a funded budget debits the wallet, so ACTIVE and SCHEDULED
         // budgets must refund allocated-but-unspent envelope balance before
         // soft-cancel. DRAFT was never debited; COMPLETED was already refunded.
         if (isFundedBudgetStatus(budget.getStatus())) {
-            budgetLifeCycleManager.refundUnusedBudgetBalance(budget, user);
+            refunded = budgetLifeCycleManager.refundUnusedBudgetBalance(budget, user);
             if (budget.getStatus() == BudgetStatus.SCHEDULED) {
-                refundCreationFee(budget, user);
+                refunded = refunded.add(refundCreationFee(budget, user));
             }
         }
         // Soft-delete rather than hard-delete: keep the budget, its envelopes, and
@@ -1236,6 +1238,7 @@ public class BudgetService {
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetRepository.save(budget);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
+        return refunded;
     }
 
     /**
@@ -1246,10 +1249,10 @@ public class BudgetService {
      * on the controller; there is no user-facing path to this.
      */
     @Transactional
-    public void deleteBudgetAsAdmin(Long budgetId) {
+    public BigDecimal deleteBudgetAsAdmin(Long budgetId) {
         Budget budget = budgetRepository.findById(budgetId)
                 .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
-        deleteBudget(budgetId, budget.getUser().getEmail());
+        return deleteBudget(budgetId, budget.getUser().getEmail());
     }
 
 
