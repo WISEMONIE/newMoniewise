@@ -78,7 +78,8 @@ public class WalletController {
                 wallet.getStatus().name(),
                 wallet.getUpdatedAt(),
                 wallet.getProviderName(),
-                totalHoldings
+                totalHoldings,
+                walletOpeningRestriction(userId)
         ));
     }
 
@@ -86,6 +87,19 @@ public class WalletController {
      * The app reads this before any money action. A user with a verified BVN
      * and no account gets one here, without typing the BVN again.
      */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.moniewise.moniewise_backend.aml.OutflowGuard outflowGuard;
+
+    /** The banner data for the app, or null when nothing limits money out. */
+    private java.util.Map<String, Object> walletOpeningRestriction(Long userId) {
+        try {
+            return outflowGuard == null ? null : outflowGuard.restrictionFor(userId);
+        } catch (RuntimeException e) {
+            log.warn("[AML] Could not read restrictions for user={}: {}", userId, e.getMessage());
+            return null;
+        }
+    }
+
     private Wallet walletWithAccount(Long userId) {
         Wallet wallet;
         try {
@@ -339,6 +353,9 @@ public class WalletController {
                     "status", "success",
                     "message", "Transfer successful"
             ));
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (IllegalArgumentException | javax.persistence.EntityNotFoundException e) {
             return ResponseEntity.badRequest().body(Map.of("status", "error", "message", e.getMessage()));
         } catch (com.moniewise.moniewise_backend.exception.InsufficientFundsException e) {
@@ -382,6 +399,9 @@ public class WalletController {
                     "message", "Transfer initiated. You will be notified once confirmed.",
                     "data", withdrawalData
             ));
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (IllegalArgumentException | IllegalStateException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
             return ResponseEntity.badRequest().body(Map.of("status", false, "error", e.getMessage()));

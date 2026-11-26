@@ -36,7 +36,8 @@ public class OutflowBlockedException extends IllegalArgumentException {
         return remaining;
     }
 
+    /** 400, the same status these refusals had before, so older app versions behave the same. */
     public HttpStatus getStatus() {
-        return HttpStatus.FORBIDDEN;
+        return HttpStatus.BAD_REQUEST;
     }
 }

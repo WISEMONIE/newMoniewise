@@ -28,4 +28,11 @@ public class WalletResponse {
      */
     String providerName;
     BigDecimal totalHoldings;
+
+    /**
+     * Only present when money out is limited: frozen, under review, or the
+     * first-day limit. The app shows a banner from it. Absent for everyone else.
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    java.util.Map<String, Object> restriction;
 }

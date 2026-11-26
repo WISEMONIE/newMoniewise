@@ -72,6 +72,9 @@ public class VasController {
                     "message", purchaseStatusMessage(txn.getStatus().name()),
                     "data", toTransactionMap(txn)
             ));
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (com.moniewise.moniewise_backend.exception.InsufficientFundsException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.VAS_AIRTIME_PURCHASE, throttleKey);
             return ResponseEntity.status(422).body(Map.of("status", false, "error", e.getMessage()));
@@ -101,6 +104,9 @@ public class VasController {
                     "message", purchaseStatusMessage(txn.getStatus().name()),
                     "data", toTransactionMap(txn)
             ));
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (com.moniewise.moniewise_backend.exception.InsufficientFundsException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.VAS_DATA_PURCHASE, throttleKey);
             return ResponseEntity.status(422).body(Map.of("status", false, "error", e.getMessage()));

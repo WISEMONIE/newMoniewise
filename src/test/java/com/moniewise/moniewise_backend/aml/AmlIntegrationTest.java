@@ -220,7 +220,9 @@ class AmlIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON).content(withdrawBody(1_500_000)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("being reviewed")))
-                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("₦50,000")));
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("₦50,000")))
+                .andExpect(jsonPath("$.code").value("OUTFLOW_HELD"))
+                .andExpect(jsonPath("$.remaining").value(50000));
 
         assertEquals(0, balance(c).compareTo(new BigDecimal("2000000")), "nothing left the wallet");
         verify(paymentGatewayResolver, never()).resolveForWallet(any());
@@ -328,6 +330,45 @@ class AmlIntegrationTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    // ── What the app shows ─────────────────────────────────────────────────
+
+    @Test
+    void theWalletTellsTheAppAboutAReviewAndStaysQuietOtherwise() throws Exception {
+        Customer normal = established();
+        mvc.perform(get("/wallets").with(user(normal.user().getEmail()).roles("USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.restriction").doesNotExist());
+
+        Customer held = established();
+        rubiesCredit(held, 2_000_000, "IT-" + UUID.randomUUID(), "ADA OKAFOR");
+        mvc.perform(get("/wallets").with(user(held.user().getEmail()).roles("USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.restriction.underReview").value(true))
+                .andExpect(jsonPath("$.restriction.frozen").value(false))
+                .andExpect(jsonPath("$.restriction.availableToSend").value(50000));
+    }
+
+    @Test
+    void everyMoneyEndpointSendsTheBlockCode() throws Exception {
+        Customer c = established();
+        var admin = user("ops@example.test").roles("ADMIN");
+        mvc.perform(post("/admin/aml/users/" + c.id() + "/freeze").with(admin)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"test\"}")).andExpect(status().isOk());
+        var customer = user(c.user().getEmail()).roles("USER");
+
+        mvc.perform(post("/wallets/transfer/p2p").with(customer).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"recipientIdentity\":\"someone@example.test\",\"amount\":1000,\"transactionPin\":\"" + PIN + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("WALLET_FROZEN"));
+        mvc.perform(post("/vas/airtime/purchase").with(customer).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"network\":\"MTN\",\"mobileNumber\":\"08030000000\",\"amount\":100,\"transactionPin\":\"" + PIN + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("WALLET_FROZEN"));
+        mvc.perform(get("/wallets").with(customer))
+                .andExpect(jsonPath("$.restriction.frozen").value(true))
+                .andExpect(jsonPath("$.restriction.availableToSend").value(0));
     }
 
     // ── The Open Wallet screen ─────────────────────────────────────────────

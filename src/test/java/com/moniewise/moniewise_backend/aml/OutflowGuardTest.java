@@ -159,6 +159,62 @@ class OutflowGuardTest {
     }
 
     @Test
+    void noLimitsMeansNoBannerData() {
+        when(holds.findByUserIdAndStatusInOrderByIdDesc(eq(USER_ID), any())).thenReturn(List.of());
+        assertNull(guard.restrictionFor(USER_ID));
+    }
+
+    @Test
+    void aReviewShowsWhatIsLeftToSend() {
+        InflowHold hold = largeInflowHold(45_000);
+        when(holds.findByUserIdAndStatusInOrderByIdDesc(eq(USER_ID), any())).thenReturn(List.of(hold));
+
+        var r = guard.restrictionFor(USER_ID);
+
+        assertEquals(true, r.get("underReview"));
+        assertEquals(false, r.get("frozen"));
+        assertEquals(false, r.get("newAccount"));
+        assertEquals(0, ((BigDecimal) r.get("availableToSend")).compareTo(naira(5_000)));
+        assertEquals(false, r.get("customerContacted"));
+    }
+
+    @Test
+    void aFrozenWalletHasNothingToSend() {
+        wallet.setStatus(WalletStatus.FROZEN);
+        when(holds.findByUserIdAndStatusInOrderByIdDesc(eq(USER_ID), any())).thenReturn(List.of());
+
+        var r = guard.restrictionFor(USER_ID);
+
+        assertEquals(true, r.get("frozen"));
+        assertEquals(0, ((BigDecimal) r.get("availableToSend")).signum());
+    }
+
+    @Test
+    void aBrandNewWalletShowsTheFirstDayLimitBeforeAnyTransfer() {
+        wallet.setOpenedAt(NOW.minusHours(2));
+        when(holds.findByUserIdAndStatusInOrderByIdDesc(eq(USER_ID), any())).thenReturn(List.of());
+
+        var r = guard.restrictionFor(USER_ID);
+
+        assertEquals(true, r.get("newAccount"));
+        assertEquals(NOW.minusHours(2).plusHours(24), r.get("newAccountUntil"));
+        assertEquals(0, ((BigDecimal) r.get("availableToSend")).compareTo(naira(20_000)));
+    }
+
+    @Test
+    void theSmallestAllowanceWins() {
+        wallet.setOpenedAt(NOW.minusHours(2));
+        InflowHold review = largeInflowHold(0);
+        when(holds.findByUserIdAndStatusInOrderByIdDesc(eq(USER_ID), any())).thenReturn(List.of(review));
+
+        var r = guard.restrictionFor(USER_ID);
+
+        assertEquals(true, r.get("underReview"));
+        assertEquals(true, r.get("newAccount"));
+        assertEquals(0, ((BigDecimal) r.get("availableToSend")).compareTo(naira(20_000)));
+    }
+
+    @Test
     void zeroOrMissingAmountsAreIgnored() {
         assertDoesNotThrow(() -> guard.authorize(USER_ID, BigDecimal.ZERO, BANK_TRANSFER));
         assertDoesNotThrow(() -> guard.authorize(USER_ID, null, BANK_TRANSFER));

@@ -95,6 +95,9 @@ public class EnvelopeController {
                     )
             ));
 
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (IllegalArgumentException e) {
             logger.warn("Invalid transfer request for envelope {}: {}", id, e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));

@@ -107,6 +107,69 @@ public class OutflowGuard {
         }
     }
 
+    /**
+     * What limits this customer's money out right now, for the app's banner.
+     * Read-only. Null when nothing does, so most wallet responses are unchanged.
+     * <ul>
+     *   <li>frozen: nothing can leave</li>
+     *   <li>underReview: a large payment is being reviewed</li>
+     *   <li>newAccount: the first-day limit applies, until {@code newAccountUntil}</li>
+     *   <li>availableToSend: the smallest amount left across the limits that apply</li>
+     *   <li>customerContacted: support already heard from them about the review</li>
+     * </ul>
+     */
+    @Transactional(readOnly = true)
+    public java.util.Map<String, Object> restrictionFor(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
+        boolean frozen = wallet != null && wallet.getStatus() == WalletStatus.FROZEN;
+        boolean underReview = false;
+        boolean contacted = false;
+        LocalDateTime firstDayEnds = null;
+        BigDecimal available = null;
+
+        if (settings.enabled()) {
+            LocalDateTime now = LocalDateTime.now(clock);
+            boolean firstDayHoldSeen = false;
+            for (InflowHold hold : holds.findByUserIdAndStatusInOrderByIdDesc(userId, InflowReviewService.HOLDING)) {
+                if (!hold.isHoldingAt(now)) {
+                    continue;
+                }
+                if (hold.getReason() == InflowHold.Reason.LARGE_INFLOW) {
+                    underReview = true;
+                    contacted = contacted || hold.getCustomerContactedAt() != null;
+                } else {
+                    firstDayHoldSeen = true;
+                    firstDayEnds = hold.getEndsAt();
+                }
+                available = available == null ? hold.remaining() : available.min(hold.remaining());
+            }
+            // A new wallet that has not sent anything yet has no first-day row.
+            LocalDateTime opened = wallet != null ? wallet.getOpenedAt() : null;
+            if (!firstDayHoldSeen && opened != null
+                    && now.isBefore(opened.plusHours(AmlSettings.FIRST_DAY_HOURS))) {
+                firstDayEnds = opened.plusHours(AmlSettings.FIRST_DAY_HOURS);
+                available = available == null ? settings.firstDayCap() : available.min(settings.firstDayCap());
+            }
+        }
+
+        if (!frozen && !underReview && firstDayEnds == null) {
+            return null;
+        }
+        java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("frozen", frozen);
+        out.put("underReview", underReview);
+        out.put("newAccount", firstDayEnds != null);
+        if (firstDayEnds != null) {
+            out.put("newAccountUntil", firstDayEnds);
+        }
+        out.put("availableToSend", frozen ? BigDecimal.ZERO : available);
+        out.put("customerContacted", contacted);
+        return out;
+    }
+
     /** Opens the first-day limit for a wallet that opened in the last 24 hours, once. */
     private void ensureFirstDayHold(Long userId, Wallet wallet, LocalDateTime now) {
         LocalDateTime opened = wallet != null ? wallet.getOpenedAt() : null;

@@ -138,6 +138,9 @@ public class SavingsController {
             SavingsGoal result = savingsService.withdrawSavings(
                     user.getId(), savingsGoalId, body != null ? body.getAmount() : null);
             return ResponseEntity.ok(result);
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
             logger.warn("Withdrawal failed for {}: {}", principal.getName(), e.getMessage());
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -161,6 +164,9 @@ public class SavingsController {
             User user = currentUser(principal.getName());
             SavingsGoal result = savingsService.transferSavingsToBank(user.getId(), savingsGoalId, request);
             return ResponseEntity.ok(result);
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
             logger.warn("Savings bank transfer failed for {}: {}", principal.getName(), e.getMessage());
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -182,6 +188,9 @@ public class SavingsController {
             User user = currentUser(principal.getName());
             SavingsGoal result = savingsService.transferSavingsToUser(user.getId(), savingsGoalId, request);
             return ResponseEntity.ok(result);
+        } catch (com.moniewise.moniewise_backend.aml.OutflowBlockedException blocked) {
+            // Freeze, review hold or first-day limit: the global handler adds the code the app reads.
+            throw blocked;
         } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
             logger.warn("Savings P2P failed for {}: {}", principal.getName(), e.getMessage());
             return ResponseEntity.badRequest().body(e.getMessage());
