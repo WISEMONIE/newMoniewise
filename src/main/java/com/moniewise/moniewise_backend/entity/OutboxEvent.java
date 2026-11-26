@@ -69,6 +69,10 @@ public class OutboxEvent {
     public static final short PRIORITY_PERSONAL = 0;
     public static final short PRIORITY_BULK = 1;
 
+    /** The admin broadcast this push belongs to, if any. */
+    @Column(name = "broadcast_id")
+    private Long broadcastId;
+
     /** Bulk pushes (admin broadcasts) are delivered after personal alerts. */
     @Column(name = "priority", nullable = false)
     private short priority = PRIORITY_PERSONAL;

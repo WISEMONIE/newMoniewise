@@ -641,6 +641,21 @@ public class NotificationService {
                                                   String redirectUrl,
                                                   long ttlSeconds,
                                                   String imageUrl) {
+        return enqueueAdminBroadcastNotification(userId, type, title, message, actionType, redirectUrl,
+                ttlSeconds, imageUrl, null);
+    }
+
+    /** Same again, linked to the admin broadcast so its delivery can be reported. */
+    @Transactional
+    public Long enqueueAdminBroadcastNotification(Long userId,
+                                                  NotificationType type,
+                                                  String title,
+                                                  String message,
+                                                  String actionType,
+                                                  String redirectUrl,
+                                                  long ttlSeconds,
+                                                  String imageUrl,
+                                                  Long broadcastId) {
         if (userId == null) {
             throw new IllegalArgumentException("userId is required");
         }
@@ -679,6 +694,7 @@ public class NotificationService {
         event.setTtlSeconds(ttlSeconds > 0 ? ttlSeconds : 86_400L);
         // A broadcast can be thousands of pushes; personal alerts go first.
         event.setPriority(OutboxEvent.PRIORITY_BULK);
+        event.setBroadcastId(broadcastId);
         outboxEventRepository.save(event);
         return event.getId();
     }

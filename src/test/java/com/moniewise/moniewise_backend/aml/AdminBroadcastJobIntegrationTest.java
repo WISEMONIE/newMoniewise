@@ -289,4 +289,79 @@ class AdminBroadcastJobIntegrationTest {
                     .andExpect(status().isOk());
         }
     }
+    // ── Delivery report ────────────────────────────────────────────────────
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> delivery() throws Exception {
+        String json = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/admin/notifications/delivery").with(user("ops@example.test").roles("ADMIN")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        return new com.fasterxml.jackson.databind.ObjectMapper().readValue(json, Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> deliveryOf(Long broadcastId) throws Exception {
+        Map<String, Object> all = (Map<String, Object>) delivery().get("broadcasts");
+        return (Map<String, Object>) all.get(String.valueOf(broadcastId));
+    }
+
+    private Long latestBroadcastId() {
+        return broadcasts.findTop100ByOrderByCreatedAtDesc().get(0).getId();
+    }
+
+    @Test
+    void theHistoryShowsAPushThatReachedAPhone() throws Exception {
+        User u = person();
+        mvc.perform(post("/admin/notifications/special").with(user("ops@example.test").roles("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("\"allUsers\":false,\"deliverFcmNow\":true,\"emails\":[\"" + u.getEmail() + "\"]")))
+                .andExpect(status().isOk());
+
+        Map<String, Object> d = deliveryOf(latestBroadcastId());
+        assertEquals(1, ((Number) d.get("sent")).intValue(), d.toString());
+        assertEquals(0, ((Number) d.get("waiting")).intValue(), d.toString());
+    }
+
+    @Test
+    void someoneWithNoPhoneShowsAsNoPhoneNotSent() throws Exception {
+        String tag = UUID.randomUUID().toString().substring(0, 8);
+        User u = new User();
+        u.setEmail("job-nophone-" + tag + "@example.test");
+        u.setPhone("0807" + ThreadLocalRandom.current().nextInt(1_000_000, 9_999_999));
+        u.setPassword("not-used");
+        u.setRole(Role.USER);
+        u.setVerified(true);
+        u.setCreatedAt(LocalDateTime.now().minusDays(30));
+        u = userRepository.saveAndFlush(u);
+
+        mvc.perform(post("/admin/notifications/special").with(user("ops@example.test").roles("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("\"allUsers\":false,\"deliverFcmNow\":true,\"emails\":[\"" + u.getEmail() + "\"]")))
+                .andExpect(status().isOk());
+
+        Map<String, Object> d = deliveryOf(latestBroadcastId());
+        assertEquals(0, ((Number) d.get("sent")).intValue(), d.toString());
+        assertEquals(1, ((Number) d.get("noPhone")).intValue(), d.toString());
+        verify(firebase, never()).send(any(Message.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void queuedPushesThatDoNotMoveAreFlaggedAsStuck() throws Exception {
+        person();
+        mvc.perform(post("/admin/notifications/special").with(user("ops@example.test").roles("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("\"allUsers\":true,\"includeTestAccounts\":true")))
+                .andExpect(status().isOk());
+        Long id = waitUntilDone(latestBroadcastId()).getId();
+
+        Map<String, Object> d = deliveryOf(id);
+        assertEquals(userRepository.countBroadcastRecipients(true), ((Number) d.get("waiting")).longValue(),
+                "the worker is paused in this test, so every push is still waiting");
+        jdbc.update("UPDATE outbox_events SET created_at = now() - interval '20 minutes' WHERE broadcast_id = ?", id);
+
+        Map<String, Object> queue = (Map<String, Object>) delivery().get("queue");
+        assertEquals(true, queue.get("stuck"), queue.toString());
+        assertTrue(((Number) queue.get("oldestWaitingMinutes")).intValue() >= 19, queue.toString());
+    }
 }
