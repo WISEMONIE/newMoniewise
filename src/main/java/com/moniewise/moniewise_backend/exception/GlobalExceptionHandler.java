@@ -51,6 +51,19 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    /** Neither BVN provider could answer. The customer sees a calm retry message, not the provider's words. */
+    @ExceptionHandler(BvnProviderUnavailableException.class)
+    public ResponseEntity<Map<String, Object>> handleBvnProviderUnavailable(BvnProviderUnavailableException ex) {
+        logger.warn("BVN check unavailable: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+                "status", HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "code", BvnProviderUnavailableException.CODE,
+                "error", BvnProviderUnavailableException.CLIENT_MESSAGE,
+                "message", BvnProviderUnavailableException.CLIENT_MESSAGE,
+                "timestamp", LocalDateTime.now().toString()
+        ));
+    }
+
     @ExceptionHandler(BvnFallbackIdentityRequiredException.class)
     public ResponseEntity<Map<String, Object>> handleBvnFallbackIdentity(
             BvnFallbackIdentityRequiredException ex) {

@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
+import com.moniewise.moniewise_backend.exception.BvnProviderUnavailableException;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import lombok.RequiredArgsConstructor;
@@ -89,27 +90,32 @@ public class SecureWavePaymentProvider implements PaymentProvider {
                 Boolean status = (Boolean) body.get("status");
 
                 if (Boolean.FALSE.equals(status)) {
-                    String message = String.valueOf(body.getOrDefault("message", "BVN verification failed"));
-                    log.error("[BVN] SecureWave returned status=false: {}", message);
-                    throw new RuntimeException("BVN verification failed: " + message);
+                    String detail = describe(body);
+                    log.error("[BVN] SecureWave returned status=false: {}", detail);
+                    throw failure(detail, null);
                 }
 
                 @SuppressWarnings("unchecked")
                 Map<String, Object> data = (Map<String, Object>) body.get("data");
                 if (data == null) {
-                    throw new RuntimeException("BVN verification failed: empty data in response");
+                    throw new BvnProviderUnavailableException("empty data in response");
                 }
 
                 log.info("[BVN] Verification successful for bvn={}***", bvn.substring(0, 4));
                 return mapToBvnResult(data);
             }
 
-            throw new RuntimeException("BVN verification failed: unexpected HTTP status " + response.getStatusCode());
+            throw new BvnProviderUnavailableException("unexpected HTTP status " + response.getStatusCode());
 
         } catch (HttpClientErrorException e) {
             log.error("[BVN] SecureWave rejected request — HTTP {}: {}", e.getStatusCode(), e.getResponseBodyAsString());
-            String swMessage = extractSecureWaveMessage(e.getResponseBodyAsString());
-            throw new IllegalArgumentException(swMessage, e);
+            String detail = describe(e.getResponseBodyAsString());
+            int code = e.getRawStatusCode();
+            if (code == 401 || code == 403) {
+                // Our credentials, not the customer's BVN.
+                throw new BvnProviderUnavailableException("HTTP " + code + ": " + detail, e);
+            }
+            throw failure(detail, e);
         } catch (RuntimeException e) {
             throw e; // already wrapped, re-throw as-is
         } catch (Exception e) {
@@ -118,17 +124,70 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         }
     }
 
+    /** Shown when SecureWave clearly says the BVN does not exist or is invalid. */
+    public static final String BVN_NOT_FOUND_MESSAGE =
+            "We could not find a BVN matching those 11 digits. Check the number and try again.";
+
+    /**
+     * A clear "this BVN is wrong" is the customer's to fix. Anything else
+     * (SecureWave has answered "Data Fetched Successfully" with status
+     * "failed") says nothing about the BVN, so it counts as SecureWave
+     * failing and the Rubies fallback can take over.
+     */
+    static RuntimeException failure(String detail, Throwable cause) {
+        if (clearlyRejectsBvn(detail)) {
+            return new IllegalArgumentException(BVN_NOT_FOUND_MESSAGE, cause);
+        }
+        return cause == null
+                ? new BvnProviderUnavailableException(detail)
+                : new BvnProviderUnavailableException(detail, cause);
+    }
+
+    static boolean clearlyRejectsBvn(String detail) {
+        if (detail == null) {
+            return false;
+        }
+        String text = detail.toLowerCase(java.util.Locale.ROOT);
+        return text.contains("invalid bvn")
+                || text.contains("bvn is invalid")
+                || text.contains("invalid bank verification")
+                || text.contains("bvn not found")
+                || text.contains("not found")
+                || text.contains("does not exist")
+                || text.contains("no record")
+                || text.contains("could not find")
+                || text.contains("bvn is not valid")
+                || text.contains("incorrect bvn");
+    }
+
+    /** SecureWave's own words (message, data.message, data.status) for logs and classification. */
     @SuppressWarnings("unchecked")
-    private String extractSecureWaveMessage(String responseBody) {
+    static String describe(Object responseBody) {
+        Map<String, Object> body = null;
         try {
-            Map<String, Object> body = new com.fasterxml.jackson.databind.ObjectMapper()
-                    .readValue(responseBody, Map.class);
-            Object message = body.get("message");
-            if (message != null && !message.toString().isBlank()) {
-                return message.toString();
+            if (responseBody instanceof Map) {
+                body = (Map<String, Object>) responseBody;
+            } else if (responseBody != null && !responseBody.toString().isBlank()) {
+                body = new com.fasterxml.jackson.databind.ObjectMapper().readValue(responseBody.toString(), Map.class);
             }
-        } catch (Exception ignored) {}
-        return "BVN verification failed";
+        } catch (Exception notJson) {
+            return String.valueOf(responseBody);
+        }
+        if (body == null) {
+            return "no response body";
+        }
+        StringBuilder out = new StringBuilder(String.valueOf(body.getOrDefault("message", "")));
+        Object data = body.get("data");
+        if (data instanceof Map) {
+            Map<String, Object> d = (Map<String, Object>) data;
+            if (d.get("message") != null && !d.get("message").equals(body.get("message"))) {
+                out.append(" / ").append(d.get("message"));
+            }
+            if (d.get("status") != null) {
+                out.append(" (status ").append(d.get("status")).append(')');
+            }
+        }
+        return out.toString().trim();
     }
 
     /** Maps the SecureWave {@code data} block to our DTO (image field excluded). */

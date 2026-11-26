@@ -294,6 +294,9 @@ public class KycService {
     }
 
     private boolean isSecureWaveUnavailable(Throwable error) {
+        if (error instanceof com.moniewise.moniewise_backend.exception.BvnProviderUnavailableException) {
+            return true;
+        }
         Throwable current = error;
         while (current != null) {
             if (current instanceof ResourceAccessException) {
