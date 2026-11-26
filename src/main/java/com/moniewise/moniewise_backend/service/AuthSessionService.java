@@ -46,7 +46,9 @@ public class AuthSessionService {
                 .orElseThrow(() -> new IllegalStateException("User not found while creating session"));
 
         LocalDateTime now = LocalDateTime.now();
-        authSessionRepository.revokeAllSessionsForUser(lockedUser.getId(), now);
+        // Signing in on the phone replaces the phone session only. A website
+        // admin session (its own kind) is left alone.
+        authSessionRepository.revokeSessionsOfKindForUser(lockedUser.getId(), AuthSession.KIND_APP, now);
 
         AuthSession session = new AuthSession();
         session.setUser(lockedUser);
@@ -59,15 +61,20 @@ public class AuthSessionService {
     }
 
     /**
-     * A session for the website admin. Unlike {@link #createSession}, it
-     * leaves the user's other sessions alone, so signing in on the website
-     * does not sign an admin out of the phone app.
+     * A session for the website admin. It replaces the user's previous
+     * website session only, so signing in on the website does not sign an
+     * admin out of the phone app. The database allows one active session of
+     * each kind per user (V66).
      */
     @Transactional
     public String createSiteAdminSession(User user) {
+        User lockedUser = userRepository.findByIdForUpdate(user.getId())
+                .orElseThrow(() -> new IllegalStateException("User not found while creating session"));
         LocalDateTime now = LocalDateTime.now();
+        authSessionRepository.revokeSessionsOfKindForUser(lockedUser.getId(), AuthSession.KIND_SITE_ADMIN, now);
         AuthSession session = new AuthSession();
-        session.setUser(userRepository.getReferenceById(user.getId()));
+        session.setKind(AuthSession.KIND_SITE_ADMIN);
+        session.setUser(lockedUser);
         session.setSessionId(UUID.randomUUID().toString());
         session.setCreatedAt(now);
         session.setLastSeenAt(now);

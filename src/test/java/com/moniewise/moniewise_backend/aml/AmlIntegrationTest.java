@@ -81,7 +81,41 @@ class AmlIntegrationTest {
     /** No call ever reaches a real bank from these tests. */
     @MockBean private PaymentGatewayResolver paymentGatewayResolver;
 
+    /** No real SecureWave call either; each test says what it answers. */
+    @MockBean private com.moniewise.moniewise_backend.service.SecureWavePaymentProvider secureWave;
+
     // ── Setup ───────────────────────────────────────────────────────────────
+
+    /**
+     * Hibernate builds this test schema, so constraints that only the Flyway
+     * migrations create are added here, exactly as production has them.
+     * Missing V6's one-session rule once let a sign-in bug through.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void productionConstraints() {
+        for (String sql : productionIndexes()) {
+            jdbc.execute(sql);
+        }
+    }
+
+    /** V6, then the real V66 file, so the test has production's final session rules. */
+    static java.util.List<String> productionIndexes() {
+        java.util.List<String> sql = new java.util.ArrayList<>();
+        sql.add("CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_sessions_one_active_per_user "
+                + "ON auth_sessions (user_id) WHERE revoked = FALSE");
+        try {
+            String v66 = java.nio.file.Files.readString(java.nio.file.Path.of(
+                    "src/main/resources/db/migration/V66__auth_session_kinds.sql"));
+            for (String statement : v66.replaceAll("(?m)^--.*$", "").split(";")) {
+                if (!statement.isBlank()) {
+                    sql.add(statement.trim());
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+        return sql;
+    }
 
     private record Customer(User user, Wallet wallet) {
         Long id() {
@@ -405,6 +439,54 @@ class AmlIntegrationTest {
                 .andExpect(jsonPath("$.wallet.code").value("WALLET_KYC_NAME_MISMATCH"))
                 .andExpect(jsonPath("$.wallet.retryable").value(false))
                 .andExpect(jsonPath("$.wallet.message").value(org.hamcrest.Matchers.containsString("contact support")));
+    }
+
+    @Test
+    void aContradictorySecureWaveReplyTriesRubiesAndNeverShowsSecureWavesWords() throws Exception {
+        Customer c = established();
+        jdbc.update("DELETE FROM kyc_profiles WHERE user_id = ?", c.id());
+        when(secureWave.verifyBvn(any(), any(), any())).thenThrow(
+                new com.moniewise.moniewise_backend.exception.BvnProviderUnavailableException(
+                        "Data Fetched Successfully (status failed)"));
+
+        // The customer's name is on file, so the Rubies fallback runs. Rubies is
+        // not reachable in tests either, so both checks fail: a calm retry message.
+        mvc.perform(post("/api/kyc/bvn/verify").with(user(c.user().getEmail()).roles("USER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"bvn\":\"22999888777\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("BVN_CHECK_UNAVAILABLE"))
+                .andExpect(jsonPath("$.error").value(
+                        com.moniewise.moniewise_backend.exception.BvnProviderUnavailableException.CLIENT_MESSAGE));
+    }
+
+    @Test
+    void withNoNameOnFileTheFallbackAsksForTheBvnName() throws Exception {
+        Customer c = established();
+        jdbc.update("DELETE FROM kyc_profiles WHERE user_id = ?", c.id());
+        jdbc.update("UPDATE users SET profile_data = '{}'::jsonb WHERE id = ?", c.id());
+        when(secureWave.verifyBvn(any(), any(), any())).thenThrow(
+                new com.moniewise.moniewise_backend.exception.BvnProviderUnavailableException(
+                        "Data Fetched Successfully (status failed)"));
+
+        mvc.perform(post("/api/kyc/bvn/verify").with(user(c.user().getEmail()).roles("USER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"bvn\":\"22999888778\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("BVN_FALLBACK_IDENTITY_REQUIRED"));
+    }
+
+    @Test
+    void signingInOnThePhoneLeavesTheWebsiteSessionAlone() throws Exception {
+        User admin = account(Role.ADMIN, "Admin-Pass-4");
+        String websiteToken = signIn(admin, "Admin-Pass-4");
+        String again = signIn(admin, "Admin-Pass-4");
+
+        mvc.perform(get("/admin/aml/holds").header("Authorization", "Bearer " + websiteToken))
+                .andExpect(result -> assertTrue(result.getResponse().getStatus() == 401
+                        || result.getResponse().getStatus() == 403, "a new website sign-in replaces the old one"));
+
+        sessions.createSession(admin); // the admin signs in on the phone
+        mvc.perform(get("/admin/aml/holds").header("Authorization", "Bearer " + again))
+                .andExpect(status().isOk());
     }
 
     @Test

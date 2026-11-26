@@ -43,4 +43,12 @@ public interface AuthSessionRepository extends JpaRepository<AuthSession, Long> 
     @Modifying
     @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL, s.devicePlatform = NULL WHERE s.user.id = :userId AND s.revoked = false")
     int revokeAllSessionsForUser(@Param("userId") Long userId, @Param("revokedAt") LocalDateTime revokedAt);
+
+    /** Ends this user's active sessions of one kind (APP or SITE_ADMIN), leaving the other kind alone. */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL, s.devicePlatform = NULL "
+            + "WHERE s.user.id = :userId AND s.revoked = false AND s.kind = :kind")
+    int revokeSessionsOfKindForUser(@Param("userId") Long userId,
+                                    @Param("kind") String kind,
+                                    @Param("revokedAt") LocalDateTime revokedAt);
 }
