@@ -222,24 +222,44 @@ public class BudgetController {
         }
     }
 
-    // New: DELETE /budgets/{budgetId}
-    // Admin/support only — there is deliberately NO user-facing way to dissolve
+    @Autowired
+    private AdminBudgetCancelFlow adminBudgetCancelFlow;
+
+    // DELETE /budgets/{budgetId}
+    // Admin/support only. There is deliberately NO user-facing way to dissolve
     // a budget outside the account-closure flow: free deletion would gut the
-    // discipline layer (create budget → delete → spend). The service resolves
-    // the budget's owner so the unspent-balance refund lands in THEIR wallet.
+    // discipline layer (create budget -> delete -> spend). The unspent-balance
+    // refund lands in the OWNER's wallet.
+    //
+    // Same two steps and checks as the website admin (AdminBudgetCancelFlow):
+    //   1. POST /budgets/{budgetId}/delete-code  emails the admin a code
+    //   2. DELETE /budgets/{budgetId}  with {"code": "...", "reason": "..."}
+    // Refused while money is on hold or a payment is processing, recorded in
+    // admin_budget_cancellations, and the customer is told. Unlike the
+    // website, this also dissolves scheduled, draft and completed budgets.
+
+    /** Step 1: emails the signed-in admin a code that approves deleting this one budget. */
+    @PostMapping("/{budgetId}/delete-code")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> sendDeleteCode(@PathVariable Long budgetId, Authentication authentication) {
+        return adminBudgetCancelFlow.sendCode(authentication.getName(), budgetId,
+                com.moniewise.moniewise_backend.service.AdminBudgetService.Scope.ANY_NOT_CANCELLED);
+    }
+
+    /** Step 2: the code and a reason in the body. Without them nothing is deleted. */
     @DeleteMapping("/{budgetId}")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<?> deleteBudget(@PathVariable Long budgetId) {
-        try {
-            budgetService.deleteBudgetAsAdmin(budgetId);
-            return ResponseEntity.ok("Budget deleted successfully");
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
-        } catch (SecurityException e) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error deleting budget: " + e.getMessage());
+    public ResponseEntity<?> deleteBudget(@PathVariable Long budgetId,
+                                          @RequestBody(required = false) Map<String, String> body,
+                                          Authentication authentication) {
+        if (body == null || body.get("code") == null || body.get("code").isBlank()) {
+            return ResponseEntity.status(HttpStatus.PRECONDITION_REQUIRED).body(Map.of(
+                    "status", HttpStatus.PRECONDITION_REQUIRED.value(),
+                    "error", "Deleting a budget needs a code. Call POST /budgets/" + budgetId
+                            + "/delete-code, then send DELETE with {\"code\": \"...\", \"reason\": \"...\"}."));
         }
+        return adminBudgetCancelFlow.confirm(authentication.getName(), budgetId, body,
+                com.moniewise.moniewise_backend.service.AdminBudgetService.Scope.ANY_NOT_CANCELLED);
     }
 
     @Data
