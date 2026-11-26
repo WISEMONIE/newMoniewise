@@ -2052,7 +2052,8 @@ public class BudgetLifeCycleManager {
     }
 
 
-    private BigDecimal calculateSafeRefundableAmount(Envelope envelope) {
+    /** What could safely go back to the wallet from this envelope now. Read-only. */
+    public BigDecimal calculateSafeRefundableAmount(Envelope envelope) {
         BigDecimal storedTotalRemaining = envelope.getTotalRemainingAmount() != null
                 ? envelope.getTotalRemainingAmount()
                 : BigDecimal.ZERO;

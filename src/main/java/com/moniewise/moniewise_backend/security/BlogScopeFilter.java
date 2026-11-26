@@ -42,6 +42,7 @@ public class BlogScopeFilter extends OncePerRequestFilter {
         return path.startsWith("/admin/blog/") || path.equals("/admin/blog")
                 || path.startsWith("/admin/aml/") || path.equals("/admin/aml")
                 || path.startsWith("/admin/notifications/") || path.equals("/admin/notifications")
+                || path.startsWith("/admin/budgets/") || path.equals("/admin/budgets")
                 || path.equals("/site-admin/auth/logout");
     }
 }
