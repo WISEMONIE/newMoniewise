@@ -5,11 +5,17 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.ReferralRewardRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -31,16 +37,24 @@ public class ReferralService {
     private final ReferralRewardRepository referralRewardRepository;
     private final BudgetRepository budgetRepository;
     private final SystemConfigService systemConfig;
+    private final StringRedisTemplate redis;
+    private final ObjectMapper objectMapper;
     private final SecureRandom random = new SecureRandom();
+
+    private static final Logger logger = LoggerFactory.getLogger(ReferralService.class);
 
     public ReferralService(UserRepository userRepository,
                            ReferralRewardRepository referralRewardRepository,
                            BudgetRepository budgetRepository,
-                           SystemConfigService systemConfig) {
+                           SystemConfigService systemConfig,
+                           StringRedisTemplate redis,
+                           ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.referralRewardRepository = referralRewardRepository;
         this.budgetRepository = budgetRepository;
         this.systemConfig = systemConfig;
+        this.redis = redis;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -190,13 +204,110 @@ public class ReferralService {
                 .countByReferrerUserIdAndStatus(user.getId(), ReferralReward.EARNED);
         long used = referralRewardRepository
                 .countByReferrerUserIdAndStatus(user.getId(), ReferralReward.USED);
+        // Earned while this user had no budget yet (often no wallet); unlocks with their first budget.
+        long pending = referralRewardRepository
+                .countByReferrerUserIdAndStatus(user.getId(), ReferralReward.PENDING);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", code);
         body.put("shareText", shareText(code));
-        body.put("earnedCount", available + used);
+        body.put("earnedCount", available + used + pending);
         body.put("availableCredits", available);
+        body.put("pendingCredits", pending);
         body.put("creditValue", unit);
         return body;
+    }
+
+    /** Bump when the wording or the rules below change; a new version also skips the old cache. */
+    static final String TERMS_VERSION = "2026-11-26";
+    static final String TERMS_CACHE_KEY = "referral:terms:" + TERMS_VERSION;
+    static final Duration TERMS_CACHE_TTL = Duration.ofMinutes(15);
+
+    /**
+     * Refer & Earn terms for the app, from Redis when cached (15 minutes).
+     * A setup-fee change shows within that time. If Redis is down the terms
+     * are built fresh, so the screen still works.
+     */
+    public Map<String, Object> terms() {
+        Map<String, Object> cached = readCachedTerms();
+        if (cached != null) {
+            return cached;
+        }
+        Map<String, Object> terms = buildTerms();
+        cacheTerms(terms);
+        return terms;
+    }
+
+    private Map<String, Object> readCachedTerms() {
+        try {
+            String json = redis.opsForValue().get(TERMS_CACHE_KEY);
+            if (json == null || json.isBlank()) {
+                return null;
+            }
+            return objectMapper.readValue(json, new TypeReference<LinkedHashMap<String, Object>>() { });
+        } catch (Exception e) {
+            logger.warn("[REFERRAL] terms cache read failed, building fresh: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private void cacheTerms(Map<String, Object> terms) {
+        try {
+            redis.opsForValue().set(TERMS_CACHE_KEY, objectMapper.writeValueAsString(terms), TERMS_CACHE_TTL);
+        } catch (Exception e) {
+            logger.warn("[REFERRAL] terms cache write failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Written from the rules this class actually applies, with the live
+     * setup-fee amount, so the screen and the reward logic cannot drift apart.
+     */
+    Map<String, Object> buildTerms() {
+        BigDecimal unit = feeUnit();
+        boolean priced = unit.compareTo(BigDecimal.ZERO) > 0;
+        String amount = priced ? naira(unit) : "one setup fee";
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("title", "Refer & Earn terms");
+        body.put("version", TERMS_VERSION);
+        body.put("summary", priced
+                ? "Invite a friend. When they fund their first budget, your next setup fee is " + amount + " less."
+                : "Invite a friend. When they fund their first budget, your next setup fee is waived.");
+        body.put("creditValue", unit);
+        body.put("sections", List.of(
+                section("Who can take part", List.of(
+                        "Anyone with a Wisemonie account can share their code.",
+                        "Your friend must be new to Wisemonie and add your code before they fund their first budget.",
+                        "Each friend can use one code, once. You can't use your own code.")),
+                section("How you earn", List.of(
+                        "You earn one credit when your friend funds their first budget from their wallet.",
+                        "No wallet or budget yet? Your credit waits, and unlocks when you open your wallet and create your first budget.",
+                        "There's no limit on how many friends you can invite.")),
+                section("How your credit is used", List.of(
+                        priced
+                                ? "Each credit takes " + amount + " off the setup fee of your next budget."
+                                : "Each credit covers the setup fee of your next budget.",
+                        "It's applied automatically, one credit per budget, oldest first.",
+                        priced
+                                ? "It's only used when the setup fee is at least " + amount + ", so a budget with no fee keeps your credit."
+                                : "A budget with no fee keeps your credit.")),
+                section("Good to know", List.of(
+                        "Credits have no cash value and can't be withdrawn or transferred.",
+                        "Rewards from fake or duplicate accounts, or other misuse, can be withheld or reversed.",
+                        "Wisemonie may change or end this programme. These are the current terms."))));
+        return body;
+    }
+
+    private static Map<String, Object> section(String title, List<String> points) {
+        Map<String, Object> section = new LinkedHashMap<>();
+        section.put("title", title);
+        section.put("points", points);
+        return section;
+    }
+
+    static String naira(BigDecimal amount) {
+        java.text.DecimalFormat format = new java.text.DecimalFormat("#,##0.##");
+        return "\u20A6" + format.format(amount);
     }
 
     public static String shareText(String code) {

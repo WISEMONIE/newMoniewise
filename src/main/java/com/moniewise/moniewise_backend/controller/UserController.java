@@ -206,6 +206,12 @@ public class UserController {
         return ResponseEntity.ok(referralService.summary(user));
     }
 
+    /** Refer & Earn terms: who can take part, how a credit is earned and used. */
+    @GetMapping("/referral/terms")
+    public ResponseEntity<?> referralTerms() {
+        return ResponseEntity.ok(referralService.terms());
+    }
+
     @PostMapping("/referral")
     public ResponseEntity<?> attachReferral(@RequestBody Map<String, String> body, Authentication authentication) {
         User user = userService.findByEmail(authentication.getName());
