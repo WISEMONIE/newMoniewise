@@ -295,10 +295,23 @@ class AmlIntegrationTest {
     }
 
     @Test
-    void aNewWalletReceivingOver20kIsReviewed() {
+    void aNewWalletCanBeFundedOnDayOneButOnlySends20k() throws Exception {
         Customer c = customer(BigDecimal.ZERO, LocalDateTime.now().minusHours(2), LocalDateTime.now().minusHours(3));
-        rubiesCredit(c, 25_000, "IT-" + UUID.randomUUID(), "EMMANUEL MADU");
-        assertEquals(0, largeHold(c).getThresholdUsed().compareTo(new BigDecimal("20000")));
+        rubiesCredit(c, 150_000, "IT-" + UUID.randomUUID(), "EMMANUEL MADU");
+
+        assertEquals(0, balance(c).compareTo(new BigDecimal("150000")), "the deposit lands");
+        assertTrue(holds.findByUserIdOrderByIdDesc(c.id()).stream()
+                .noneMatch(h -> h.getReason() == InflowHold.Reason.LARGE_INFLOW), "no review on day one");
+
+        mvc.perform(get("/wallets").with(user(c.user().getEmail()).roles("USER")))
+                .andExpect(jsonPath("$.restriction.newAccount").value(true))
+                .andExpect(jsonPath("$.restriction.underReview").value(false))
+                .andExpect(jsonPath("$.restriction.availableToSend").value(20000));
+
+        guard.authorize(c.id(), new BigDecimal("20000"), OutflowGuard.Channel.BANK_TRANSFER);
+        OutflowBlockedException e = assertThrows(OutflowBlockedException.class,
+                () -> guard.authorize(c.id(), new BigDecimal("1"), OutflowGuard.Channel.AIRTIME));
+        assertEquals(OutflowBlockedException.NEW_ACCOUNT_LIMIT, e.getCode());
     }
 
     /** Starts the calls together and counts the ones that were allowed. */

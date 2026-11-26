@@ -2,10 +2,8 @@ package com.moniewise.moniewise_backend.aml;
 
 import com.moniewise.moniewise_backend.entity.KycProfile;
 import com.moniewise.moniewise_backend.entity.User;
-import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.repository.KycProfileRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
-import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -36,7 +34,6 @@ public class InflowReviewService {
     private final InflowEventRepository inflowEvents;
     private final InflowHoldRepository holds;
     private final UserRepository userRepository;
-    private final WalletRepository walletRepository;
     private final KycProfileRepository kycProfileRepository;
     private final AmlSettings settings;
     private final AmlNotifier notifier;
@@ -45,7 +42,6 @@ public class InflowReviewService {
     public InflowReviewService(InflowEventRepository inflowEvents,
                                InflowHoldRepository holds,
                                UserRepository userRepository,
-                               WalletRepository walletRepository,
                                KycProfileRepository kycProfileRepository,
                                AmlSettings settings,
                                AmlNotifier notifier,
@@ -53,7 +49,6 @@ public class InflowReviewService {
         this.inflowEvents = inflowEvents;
         this.holds = holds;
         this.userRepository = userRepository;
-        this.walletRepository = walletRepository;
         this.kycProfileRepository = kycProfileRepository;
         this.settings = settings;
         this.notifier = notifier;
@@ -164,15 +159,14 @@ public class InflowReviewService {
     }
 
     /**
-     * Accounts opened in the last 24 hours use the first-day limit, accounts
-     * under the young-account age the lower threshold, the rest the normal one.
+     * Accounts under the young-account age use the lower threshold, the rest
+     * the normal one.
+     *
+     * <p>Deposits in a wallet's first 24 hours do not start a review on their
+     * own: new customers should be able to fund and budget freely. The CBN
+     * first-day limit applies to money out only (see OutflowGuard).
      */
     BigDecimal thresholdFor(User user, LocalDateTime now) {
-        Optional<Wallet> wallet = walletRepository.findByUserId(user.getId());
-        LocalDateTime opened = wallet.map(Wallet::getOpenedAt).orElse(null);
-        if (opened != null && now.isBefore(opened.plusHours(AmlSettings.FIRST_DAY_HOURS))) {
-            return settings.firstDayCap();
-        }
         LocalDateTime since = user.getCreatedAt();
         if (since != null && now.isBefore(since.plusDays(settings.youngAccountDays()))) {
             return settings.youngAccountInflowThreshold();

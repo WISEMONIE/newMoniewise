@@ -45,7 +45,7 @@ class InflowReviewServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new InflowReviewService(inflowEvents, holds, userRepository, walletRepository,
+        service = new InflowReviewService(inflowEvents, holds, userRepository,
                 kycProfileRepository, AmlTestSupport.defaults(), notifier, Optional.of(AmlTestSupport.clock()));
         user = new User();
         user.setId(USER_ID);
@@ -119,10 +119,11 @@ class InflowReviewServiceTest {
     }
 
     @Test
-    void walletsInTheirFirstDayUseTheFirstDayLimit() {
+    void aNewWalletCanBeFundedFreelyOnItsFirstDay() {
         user.setCreatedAt(NOW.minusDays(1));
         wallet.setOpenedAt(NOW.minusHours(3));
-        assertTrue(credit(25_000, 25_000, "ADA OKAFOR").isPresent());
+        assertTrue(credit(400_000, 400_000, "ADA OKAFOR").isEmpty(), "no review for an everyday first deposit");
+        assertTrue(credit(500_000, 500_000, "ADA OKAFOR").isPresent(), "the young-account threshold still applies");
     }
 
     @Test
