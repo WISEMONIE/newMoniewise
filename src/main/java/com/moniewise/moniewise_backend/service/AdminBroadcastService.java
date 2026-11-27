@@ -108,6 +108,10 @@ public class AdminBroadcastService {
         if (imageUrl != null && !imageUrl.toLowerCase(Locale.ROOT).startsWith("https://")) {
             throw new IllegalArgumentException("The image must be a public https link");
         }
+        String stillImageUrl = imageUrl == null ? null : blankToNull(request.getStillImageUrl());
+        if (stillImageUrl != null && !stillImageUrl.toLowerCase(Locale.ROOT).startsWith("https://")) {
+            throw new IllegalArgumentException("The still image must be a public https link");
+        }
 
         if (!sendFcm && !sendEmail) {
             throw new IllegalArgumentException("At least one of sendFcm or sendEmail must be true");
@@ -129,6 +133,7 @@ public class AdminBroadcastService {
         AdminBroadcast row = newHistory(type, title, message, imageUrl, ctaLabel, ctaUrl, sendFcm,
                 sendEmail, includeTestAccounts, allUsers, request, adminEmail);
         row.setRequestKey(requestKey);
+        row.setStillImageUrl(stillImageUrl);
 
         if (allUsers) {
             return startJob(row, null, emailSubject, emailBody, tag, footerNote, ttlSeconds, List.of());
@@ -176,6 +181,7 @@ public class AdminBroadcastService {
                         ctaUrl,
                         ttlSeconds,
                         imageUrl,
+                        stillImageUrl,
                         history.getId()
                 );
                 fcmQueued++;

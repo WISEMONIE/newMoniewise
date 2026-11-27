@@ -656,6 +656,22 @@ public class NotificationService {
                                                   long ttlSeconds,
                                                   String imageUrl,
                                                   Long broadcastId) {
+        return enqueueAdminBroadcastNotification(userId, type, title, message, actionType, redirectUrl,
+                ttlSeconds, imageUrl, null, broadcastId);
+    }
+
+    /** Same again, with a still picture for Android when the picture is a GIF. */
+    @Transactional
+    public Long enqueueAdminBroadcastNotification(Long userId,
+                                                  NotificationType type,
+                                                  String title,
+                                                  String message,
+                                                  String actionType,
+                                                  String redirectUrl,
+                                                  long ttlSeconds,
+                                                  String imageUrl,
+                                                  String stillImageUrl,
+                                                  Long broadcastId) {
         if (userId == null) {
             throw new IllegalArgumentException("userId is required");
         }
@@ -683,6 +699,9 @@ public class NotificationService {
         }
         if (isPushImageUrl(imageUrl)) {
             payload.put("__imageUrl", imageUrl.trim());
+            if (isPushImageUrl(stillImageUrl)) {
+                payload.put("__stillImageUrl", stillImageUrl.trim());
+            }
         }
 
         OutboxEvent event = new OutboxEvent();
@@ -758,7 +777,7 @@ public class NotificationService {
                                 String redirectUrl, NotificationType type, Long userId, Long budgetId,
                                 Long envelopeId, String devicePlatform, Long notificationContextId) {
         sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, budgetId, envelopeId,
-                devicePlatform, notificationContextId, null);
+                devicePlatform, notificationContextId, null, null);
     }
 
     /** Push images must be public https links; anything else is dropped and the push goes without one. */
@@ -771,14 +790,21 @@ public class NotificationService {
      * @param imageUrl optional picture. Android shows it itself when the app is
      *                 in the background. iOS needs mutable-content plus the
      *                 notification service extension in the app (see the app
-     *                 repo's ios/NotificationServiceExtension), which reads it
-     *                 from fcm_options.image.
+     *                 repo's ios/ImageNotification), which reads it from
+     *                 fcm_options.image.
+     * @param stillImageUrl for a GIF, its first frame as PNG. Android doesn't
+     *                 animate GIFs, so the notification shown by Android uses
+     *                 this; iOS and the app's own list keep the GIF.
      */
     private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
                                 String redirectUrl, NotificationType type, Long userId, Long budgetId,
                                 Long envelopeId, String devicePlatform, Long notificationContextId,
-                                String imageUrl) {
+                                String imageUrl, String stillImageUrl) {
         boolean withImage = isPushImageUrl(imageUrl);
+        // What Android's notification shows: the still if there is one, else the picture.
+        String trayImage = withImage
+                ? (isPushImageUrl(stillImageUrl) ? stillImageUrl.trim() : imageUrl.trim())
+                : null;
         try {
             // Grouping keeps related notifications visually organized, while the
             // notification tag/id below stays unique so quick back-to-back financial
@@ -796,7 +822,7 @@ public class NotificationService {
                             .setTitle(title)
                             .setBody(body);
             if (withImage) {
-                notificationBuilder.setImage(imageUrl.trim());
+                notificationBuilder.setImage(trayImage);
             }
             com.google.firebase.messaging.Notification notificationPayload = notificationBuilder.build();
 
@@ -811,7 +837,7 @@ public class NotificationService {
                     .setVisibility(AndroidNotification.Visibility.PUBLIC)
                     .setClickAction("FLUTTER_NOTIFICATION_CLICK");
             if (withImage) {
-                androidNotification.setImage(imageUrl.trim());
+                androidNotification.setImage(trayImage);
             }
             AndroidConfig androidConfig = AndroidConfig.builder()
                     .setTtl(ttlMs)
@@ -2227,7 +2253,7 @@ public class NotificationService {
                 String redirectUrl = plan.redirectUrlFor(target.devicePlatform());
                 sendFCMMessage(target.token(), plan.title, plan.message, actionType, redirectUrl,
                         plan.type, plan.userId, plan.budgetId, plan.envelopeId,
-                        target.devicePlatform(), plan.eventId, plan.imageUrl);
+                        target.devicePlatform(), plan.eventId, plan.imageUrl, plan.stillImageUrl);
                 delivered.add(target.token());
             } catch (DeadTokenException ignored) {
                 // Token was permanently invalid — already cleaned up, don't count as delivered
@@ -2319,6 +2345,8 @@ public class NotificationService {
         String iosExternalUrl = paramString(params, "__iosUrl");
         String imageUrl = isPushImageUrl(paramString(params, "__imageUrl"))
                 ? paramString(params, "__imageUrl") : null;
+        String stillImageUrl = imageUrl != null && isPushImageUrl(paramString(params, "__stillImageUrl"))
+                ? paramString(params, "__stillImageUrl") : null;
         NotificationPriority priority = getPriority(type);
         boolean pushEligible = priority == NotificationPriority.HIGH
                 || priority == NotificationPriority.MEDIUM;
@@ -2340,6 +2368,7 @@ public class NotificationService {
             notification.setActionType(actionType);
             notification.setRedirectUrl(redirectUrl);
             notification.setImageUrl(imageUrl);
+            notification.setStillImageUrl(stillImageUrl);
             notification.setRead(false);
             // Keep push-eligible inbox rows pending until Firebase accepts a token.
             notification.setPushSent(!pushEligible);
@@ -2402,6 +2431,7 @@ public class NotificationService {
         plan.androidExternalUrl = androidExternalUrl;
         plan.iosExternalUrl = iosExternalUrl;
         plan.imageUrl = imageUrl;
+        plan.stillImageUrl = stillImageUrl;
         plan.type = type;
         plan.userId = event.getUserId();
         plan.eventId = event.getId();
@@ -2450,6 +2480,7 @@ public class NotificationService {
         String androidExternalUrl;
         String iosExternalUrl;
         String imageUrl;
+        String stillImageUrl;
         NotificationType type;
         Long userId;
         Long eventId;
@@ -2773,7 +2804,8 @@ public class NotificationService {
                     for (AuthSessionService.PushTarget target : pushTargets) {
                         sendFCMMessage(target.token(), title, n.getMessage(), n.getActionType(),
                                 n.getRedirectUrl(), n.getType(), userId, n.getBudgetId(),
-                                n.getEnvelopeId(), target.devicePlatform(), n.getId(), n.getImageUrl());
+                                n.getEnvelopeId(), target.devicePlatform(), n.getId(), n.getImageUrl(),
+                                n.getStillImageUrl());
                     }
                     n.setPushSent(true);
                     redelivered++;

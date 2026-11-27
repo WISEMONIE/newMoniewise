@@ -202,10 +202,17 @@ class AdminPushIntegrationTest {
     }
 
     @Test
-    void pictureUploadsMustBeASmallJpgOrPng() throws Exception {
+    void pictureUploadsMustBeASmallJpgPngOrGif() throws Exception {
         var admin = user("ops@example.test").roles("ADMIN");
         mvc.perform(multipart("/admin/notifications/image")
                         .file(new MockMultipartFile("file", "a.gif", "image/gif", new byte[]{1, 2, 3})).with(admin))
+                .andExpect(status().isBadRequest());
+        byte[] pngBytes = {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0};
+        mvc.perform(multipart("/admin/notifications/image")
+                        .file(new MockMultipartFile("file", "fake.gif", "image/gif", pngBytes)).with(admin))
+                .andExpect(status().isBadRequest());
+        mvc.perform(multipart("/admin/notifications/image")
+                        .file(new MockMultipartFile("file", "a.webp", "image/webp", pngBytes)).with(admin))
                 .andExpect(status().isBadRequest());
         mvc.perform(multipart("/admin/notifications/image")
                         .file(new MockMultipartFile("file", "big.png", "image/png", new byte[1024 * 1024 + 1])).with(admin))
@@ -219,5 +226,44 @@ class AdminPushIntegrationTest {
                 .andExpect(status().isForbidden());
         mvc.perform(get("/admin/notifications/history").with(user("someone@example.test").roles("USER")))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void aGifGoesToIphoneAndTheAppWhileAndroidGetsTheStill() throws Exception {
+        when(firebase.send(any(Message.class))).thenReturn("projects/x/messages/9");
+        User customer = customerWithPhone();
+        String gif = "https://firebasestorage.googleapis.com/v0/b/wisemonie/o/push%2Fimages%2Fpromo.gif?alt=media&token=a";
+        String still = "https://firebasestorage.googleapis.com/v0/b/wisemonie/o/push%2Fimages%2Fpromo.gif.still.png?alt=media&token=b";
+        String request = "{\"title\":\"Weekend offer\",\"message\":\"Plan your weekend spend with Wisemonie.\","
+                + "\"imageUrl\":\"" + gif + "\",\"stillImageUrl\":\"" + still + "\","
+                + "\"sendFcm\":true,\"sendEmail\":false,\"allUsers\":false,\"deliverFcmNow\":true,"
+                + "\"emails\":[\"" + customer.getEmail() + "\"]}";
+
+        mvc.perform(post("/admin/notifications/special").with(user("ops@example.test").roles("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk());
+
+        com.google.gson.JsonObject msg = com.google.gson.JsonParser.parseString(sentJson(customer)).getAsJsonObject();
+        assertEquals(still, msg.getAsJsonObject("notification").get("image").getAsString(), "Android tray: the still");
+        assertEquals(still, msg.getAsJsonObject("android").getAsJsonObject("notification").get("image").getAsString());
+        assertEquals(gif, msg.getAsJsonObject("apns").getAsJsonObject("fcm_options").get("image").getAsString(),
+                "iPhone: the GIF");
+        assertEquals(gif, msg.getAsJsonObject("data").get("imageUrl").getAsString(), "the app's list: the GIF");
+
+        java.util.Map<String, Object> inbox = jdbc.queryForMap(
+                "SELECT image_url, still_image_url FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                customer.getId());
+        assertEquals(gif, inbox.get("image_url"));
+        assertEquals(still, inbox.get("still_image_url"), "kept so a later re-send uses the still too");
+    }
+
+    @Test
+    void aStillLinkMustBeHttps() throws Exception {
+        User customer = customerWithPhone();
+        String request = "{\"message\":\"Hi\",\"imageUrl\":\"https://x.test/a.gif\",\"stillImageUrl\":\"http://x.test/a.png\","
+                + "\"sendFcm\":true,\"sendEmail\":false,\"allUsers\":false,\"emails\":[\"" + customer.getEmail() + "\"]}";
+        mvc.perform(post("/admin/notifications/special").with(user("ops@example.test").roles("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isBadRequest());
     }
 }

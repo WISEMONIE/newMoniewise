@@ -82,7 +82,8 @@ public class AdminBroadcastEmailDispatcher {
                     Boolean stillMine = transactions().execute(status -> {
                         int pushed = job.isSendPush()
                                 ? queuePush(user, type, job.getTitle(), job.getMessage(), pushActionType,
-                                        job.getCtaUrl(), ttlSeconds, job.getImageUrl(), broadcastId)
+                                        job.getCtaUrl(), ttlSeconds, job.getImageUrl(),
+                                        job.getStillImageUrl(), broadcastId)
                                 : 0;
                         if (broadcastHistory.advance(broadcastId, token, user.getId(), pushed, LocalDateTime.now()) == 0) {
                             status.setRollbackOnly(); // lease lost: undo this user's push
@@ -113,11 +114,11 @@ public class AdminBroadcastEmailDispatcher {
     /** Queues one push. A bad user is logged and skipped, not retried forever. */
     private int queuePush(User user, NotificationType type, String title, String message,
                           String pushActionType, String ctaUrl, long ttlSeconds, String imageUrl,
-                          Long broadcastId) {
+                          String stillImageUrl, Long broadcastId) {
         try {
             notificationService.enqueueAdminBroadcastNotification(
                     user.getId(), type, title, message, pushActionType, ctaUrl, ttlSeconds, imageUrl,
-                    broadcastId);
+                    stillImageUrl, broadcastId);
             return 1;
         } catch (IllegalArgumentException e) {
             logger.error("[ADMIN-BROADCAST-JOB] push skipped userId={}: {}", user.getId(), e.getMessage());

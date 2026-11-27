@@ -200,13 +200,20 @@ public class BlogService {
     /** Push pictures: JPG or PNG up to 1 MB, which Android and iOS both show reliably. */
     public static final long MAX_PUSH_IMAGE_SIZE = 1024L * 1024L;
 
+    /**
+     * Uploads a push picture: JPG, PNG or GIF, up to 1 MB, checked by its
+     * bytes. For a GIF it also saves the first frame as a PNG ("stillUrl"):
+     * Android notifications don't animate GIFs and Firebase only promises
+     * JPG/PNG there, so Android gets the still while iPhone and the app's
+     * notification list get the GIF.
+     */
     public Map<String, Object> uploadPushImage(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Choose an image to upload");
         }
         String contentType = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
-        if (!contentType.equals("image/jpeg") && !contentType.equals("image/png")) {
-            throw new IllegalArgumentException("Push images must be JPG or PNG");
+        if (!PUSH_IMAGE_TYPES.contains(contentType)) {
+            throw new IllegalArgumentException("Push images must be JPG, PNG or GIF");
         }
         if (file.getSize() > MAX_PUSH_IMAGE_SIZE) {
             throw new IllegalArgumentException("Push images must be 1 MB or smaller");
@@ -214,18 +221,46 @@ public class BlogService {
         // The browser's stated type can be anything; check the file itself.
         String actualType = imageTypeFromBytes(file);
         if (!contentType.equals(actualType)) {
-            throw new IllegalArgumentException("Push images must be JPG or PNG");
+            throw new IllegalArgumentException("Push images must be JPG, PNG or GIF");
         }
         String blobName = buildStandaloneBlobName(file).replaceFirst("^blog/images/", "push/images/");
-        String url = uploadBlobToFirebase(file, blobName);
-        return Map.of(
-                "url", url,
-                "contentType", contentType,
-                "fileSize", file.getSize()
-        );
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        if ("image/gif".equals(contentType)) {
+            byte[] still;
+            try {
+                still = firstFramePng(file.getBytes());
+            } catch (IOException e) {
+                throw new IllegalArgumentException("That GIF could not be read. Try another file.");
+            }
+            if (still.length > MAX_PUSH_IMAGE_SIZE) {
+                throw new IllegalArgumentException("That GIF's first frame is too large. Use a smaller GIF.");
+            }
+            result.put("url", uploadBlobToFirebase(file, blobName));
+            result.put("stillUrl", uploadBytesToFirebase(still, "image/png", blobName + ".still.png"));
+        } else {
+            result.put("url", uploadBlobToFirebase(file, blobName));
+        }
+        result.put("contentType", contentType);
+        result.put("fileSize", file.getSize());
+        return result;
     }
 
-    /** "image/png" or "image/jpeg" from the file's first bytes, or null. */
+    static final java.util.Set<String> PUSH_IMAGE_TYPES = java.util.Set.of("image/jpeg", "image/png", "image/gif");
+
+    /** The first frame of a GIF as PNG bytes. */
+    static byte[] firstFramePng(byte[] gif) throws IOException {
+        java.awt.image.BufferedImage frame = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(gif));
+        if (frame == null) {
+            throw new IOException("Not a readable image");
+        }
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        if (!javax.imageio.ImageIO.write(frame, "png", out)) {
+            throw new IOException("No PNG writer");
+        }
+        return out.toByteArray();
+    }
+
+    /** "image/png", "image/jpeg" or "image/gif" from the file's first bytes, or null. */
     static String imageTypeFromBytes(MultipartFile file) {
         byte[] head = new byte[8];
         int read;
@@ -240,6 +275,11 @@ public class BlogService {
         }
         if (read >= 3 && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8 && (head[2] & 0xFF) == 0xFF) {
             return "image/jpeg";
+        }
+        // "GIF87a" or "GIF89a"
+        if (read >= 6 && head[0] == 'G' && head[1] == 'I' && head[2] == 'F' && head[3] == '8'
+                && (head[4] == '7' || head[4] == '9') && head[5] == 'a') {
+            return "image/gif";
         }
         return null;
     }
@@ -287,6 +327,21 @@ public class BlogService {
 
     private String uploadToFirebase(MultipartFile file, Long postId, String mediaType) {
         return uploadBlobToFirebase(file, buildBlobName(file, postId, mediaType));
+    }
+
+    private String uploadBytesToFirebase(byte[] bytes, String contentType, String blobName) {
+        Bucket bucket = StorageClient.getInstance().bucket();
+        String downloadToken = UUID.randomUUID().toString();
+        BlobInfo blobInfo = BlobInfo
+                .newBuilder(bucket.getName(), blobName)
+                .setContentType(contentType)
+                .setMetadata(Map.of("firebaseStorageDownloadTokens", downloadToken))
+                .build();
+        bucket.getStorage().create(blobInfo, bytes);
+        String encodedPath = URLEncoder.encode(blobName, StandardCharsets.UTF_8).replace("+", "%20");
+        return String.format(
+                "https://firebasestorage.googleapis.com/v0/b/%s/o/%s?alt=media&token=%s",
+                bucket.getName(), encodedPath, downloadToken);
     }
 
     private String uploadBlobToFirebase(MultipartFile file, String blobName) {
