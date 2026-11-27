@@ -38,6 +38,10 @@ public class AdminBroadcastRequest {
     @Size(max = 1000, message = "Image link must be 1000 characters or fewer")
     private String imageUrl;
 
+    /** For a GIF picture: its first frame as PNG, shown on Android. */
+    @Size(max = 1000, message = "Still image link must be 1000 characters or fewer")
+    private String stillImageUrl;
+
     /** One per compose on the website. A repeat with the same key is not sent again. */
     @Size(max = 64, message = "Request key must be 64 characters or fewer")
     @javax.validation.constraints.Pattern(regexp = "^[A-Za-z0-9-]*$", message = "Request key has invalid characters")

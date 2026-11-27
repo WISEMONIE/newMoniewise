@@ -56,6 +56,10 @@ public class Notification {
     @Column(name = "image_url", length = 1000)
     private String imageUrl;
 
+    /** The first frame of a GIF picture, sent to Android instead of the GIF. */
+    @Column(name = "still_image_url", length = 1000)
+    private String stillImageUrl;
+
     /**
      * True once Firebase accepts a push for at least one active FCM token.
      * False means the notification was saved to the inbox but no push went out,

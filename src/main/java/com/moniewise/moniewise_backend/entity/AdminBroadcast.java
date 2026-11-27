@@ -33,6 +33,10 @@ public class AdminBroadcast {
     @Column(name = "image_url", length = 1000)
     private String imageUrl;
 
+    /** The first frame of a GIF picture, for Android. Null for JPG and PNG. */
+    @Column(name = "still_image_url", length = 1000)
+    private String stillImageUrl;
+
     @Column(name = "cta_label", length = 120)
     private String ctaLabel;
 
