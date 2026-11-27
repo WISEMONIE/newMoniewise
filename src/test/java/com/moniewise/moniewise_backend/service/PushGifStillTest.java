@@ -68,4 +68,22 @@ class PushGifStillTest {
         assertTrue(BlogService.PUSH_IMAGE_TYPES.contains("image/gif"));
         assertFalse(BlogService.PUSH_IMAGE_TYPES.contains("image/webp"));
     }
+
+    @Test
+    void aGifJavaCannotReadIsStillAcceptedJustWithoutAStill() {
+        // Header says GIF, but the data is broken: the upload goes ahead, Android just gets no still.
+        assertNull(BlogService.stillFor("GIF89a broken data".getBytes()));
+    }
+
+    @Test
+    void aReadableGifGetsAStill() throws Exception {
+        assertNotNull(BlogService.stillFor(twoFrameGif(20, 10)));
+    }
+
+    @Test
+    void gifsMayBeUpTo4MbButJpgAndPngStayAt1Mb() {
+        assertEquals(4L * 1024 * 1024, BlogService.maxPushImageBytes("image/gif"));
+        assertEquals(1024L * 1024, BlogService.maxPushImageBytes("image/png"));
+        assertEquals(1024L * 1024, BlogService.maxPushImageBytes("image/jpeg"));
+    }
 }
