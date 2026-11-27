@@ -215,8 +215,10 @@ public class BlogService {
         if (!PUSH_IMAGE_TYPES.contains(contentType)) {
             throw new IllegalArgumentException("Push images must be JPG, PNG or GIF");
         }
-        if (file.getSize() > MAX_PUSH_IMAGE_SIZE) {
-            throw new IllegalArgumentException("Push images must be 1 MB or smaller");
+        if (file.getSize() > maxPushImageBytes(contentType)) {
+            throw new IllegalArgumentException("image/gif".equals(contentType)
+                    ? "GIFs must be 4 MB or smaller"
+                    : "Push images must be 1 MB or smaller");
         }
         // The browser's stated type can be anything; check the file itself.
         String actualType = imageTypeFromBytes(file);
@@ -226,17 +228,17 @@ public class BlogService {
         String blobName = buildStandaloneBlobName(file).replaceFirst("^blog/images/", "push/images/");
         Map<String, Object> result = new java.util.LinkedHashMap<>();
         if ("image/gif".equals(contentType)) {
+            result.put("url", uploadBlobToFirebase(file, blobName));
+            // The still is a bonus for Android. If it can't be made, the GIF is still used.
             byte[] still;
             try {
-                still = firstFramePng(file.getBytes());
+                still = stillFor(file.getBytes());
             } catch (IOException e) {
-                throw new IllegalArgumentException("That GIF could not be read. Try another file.");
+                still = null;
             }
-            if (still.length > MAX_PUSH_IMAGE_SIZE) {
-                throw new IllegalArgumentException("That GIF's first frame is too large. Use a smaller GIF.");
+            if (still != null) {
+                result.put("stillUrl", uploadBytesToFirebase(still, "image/png", blobName + ".still.png"));
             }
-            result.put("url", uploadBlobToFirebase(file, blobName));
-            result.put("stillUrl", uploadBytesToFirebase(still, "image/png", blobName + ".still.png"));
         } else {
             result.put("url", uploadBlobToFirebase(file, blobName));
         }
@@ -246,6 +248,33 @@ public class BlogService {
     }
 
     static final java.util.Set<String> PUSH_IMAGE_TYPES = java.util.Set.of("image/jpeg", "image/png", "image/gif");
+
+    /**
+     * A GIF may be up to 4 MB: Android gets its small still, and the website
+     * upload passes through a server that accepts about 4.5 MB. JPG and PNG go
+     * to Android as they are, and Firebase caps notification pictures at 1 MB.
+     */
+    static final long MAX_PUSH_GIF_SIZE = 4L * 1024L * 1024L;
+
+    static long maxPushImageBytes(String contentType) {
+        return "image/gif".equals(contentType) ? MAX_PUSH_GIF_SIZE : MAX_PUSH_IMAGE_SIZE;
+    }
+
+    /**
+     * The GIF's first frame as a PNG for Android, or null if Java can't read
+     * this GIF (its built-in reader fails on some real GIFs) or the frame is
+     * over 1 MB. Never stops the upload.
+     */
+    static byte[] stillFor(byte[] gif) {
+        try {
+            byte[] png = firstFramePng(gif);
+            return png.length <= MAX_PUSH_IMAGE_SIZE ? png : null;
+        } catch (Exception | LinkageError e) {
+            org.slf4j.LoggerFactory.getLogger(BlogService.class)
+                    .warn("[PUSH-IMAGE] no still frame for a GIF ({}): {}", e.getClass().getSimpleName(), e.getMessage());
+            return null;
+        }
+    }
 
     /** The first frame of a GIF as PNG bytes. */
     static byte[] firstFramePng(byte[] gif) throws IOException {
